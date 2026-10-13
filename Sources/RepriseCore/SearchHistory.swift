@@ -79,11 +79,12 @@ public struct SearchHistory: Codable, Equatable, Sendable {
     }
 
     /// Saved answers quote memories, so the file is sealed like the rest of the library. A file
-    /// from before encryption is read once and sealed on the next save.
+    /// from before encryption is sealed when it is loaded, not left readable until the next search.
     public static func load(root: URL, cipher: VaultCipher) -> SearchHistory {
         let url = root.appendingPathComponent("search-history.json")
-        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 4 * 1_024 * 1_024,
-              let data = try? cipher.contents(of: url),
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 4 * 1_024 * 1_024 else { return Self() }
+        _ = try? cipher.sealFile(at: url)
+        guard let data = try? cipher.contents(of: url),
               let saved = try? JSONDecoder().decode(Self.self, from: data) else { return Self() }
         return saved
     }

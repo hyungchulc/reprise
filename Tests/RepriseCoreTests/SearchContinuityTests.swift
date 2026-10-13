@@ -77,6 +77,17 @@ final class SearchContinuityTests: XCTestCase {
         XCTAssertTrue(SearchHistory.load(root: root.appendingPathComponent("other-vault"), cipher: testKeys.cipher).queries.isEmpty)
     }
 
+    func testHistoryFromBeforeEncryptionIsSealedWhenLoaded() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-history-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("search-history.json")
+        try Data(#"{"entries":[{"query":"private question"}]}"#.utf8).write(to: url)
+        XCTAssertEqual(SearchHistory.load(root: root, cipher: testKeys.cipher).queries, ["private question"])
+        XCTAssertTrue(VaultCipher.isSealed(fileAt: url))
+        XCTAssertEqual(SearchHistory.load(root: root, cipher: testKeys.cipher).queries, ["private question"])
+    }
+
     func testOldIndexedMemoriesSurviveReopenAndRankAboveRecentNoise() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-continuity-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }

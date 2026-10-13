@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -48,10 +48,12 @@ try {
   assert(tools.tools.every(tool => tool.annotations.readOnlyHint));
   const denied = await call('tools/call', { name: 'reprise_library_status', arguments: {} });
   assert.equal(denied.isError, true);
-  assert.match(denied.content[0].text, /disabled/);
+  // A new vault has no keychain key yet; the helper must refuse before reading consent or a library.
+  assert.match(denied.content[0].text, /encryption key|disabled/);
   child.stdin.end();
   const result = await exit;
   assert.equal(result.code, 0);
+  assert.deepEqual(await readdir(root), [], 'The helper created files in a vault it may not read.');
   console.log('MCP stdio initialize, tool discovery, default-deny and clean EOF passed.');
 } finally {
   clearTimeout(timeout);

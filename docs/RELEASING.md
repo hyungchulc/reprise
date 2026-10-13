@@ -57,7 +57,9 @@ remove it afterwards with `security delete-generic-password -s local.aria.repris
 -a "library:<path>"`. Never run `--check-vault` on a copy that is still in use.
 
 The package check runs before opening a vault, requesting permissions, or creating
-the app model. The stdio check uses a temporary disabled vault. Neither test records
+the app model. The stdio check uses a temporary vault with no keychain key and confirms
+that the helper refuses access without creating a library; `package_release.sh` runs
+both checks again on the final bundle and stops if either fails. Neither test records
 the screen/microphone nor calls an AI model. Native provider checks require the
 explicit `REPRISE_TEST_NATIVE_PROVIDERS=1` opt-in. `REPRISE_TEST_CODEX=/absolute/path`
 enables a native MCP installation/removal check in a temporary home, not the user's

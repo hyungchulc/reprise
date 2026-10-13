@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0-alpha.2
+
+- Recent searches saved before encryption, including their saved answers, are sealed
+  as soon as Reprise opens. 0.6.0-alpha.1 left them readable until the next search.
+
 ## 0.6.0-alpha.1
 
 - The vault is encrypted. The database moves to SQLCipher (AES-256 with per-page HMAC,

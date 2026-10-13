@@ -22,6 +22,7 @@ else
   /usr/sbin/spctl --assess --type execute --verbose=2 "$APP"
 fi
 "$APP/Contents/MacOS/Reprise" --check-package
+node "$ROOT/script/check_mcp.mjs" "$APP/Contents/MacOS/RepriseMCP"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+[-a-zA-Z0-9.]*$ ]] || { printf 'Invalid release version.\n' >&2; exit 1; }
 ARCH="$(/usr/bin/lipo -archs "$APP/Contents/MacOS/Reprise")"
