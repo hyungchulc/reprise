@@ -16,7 +16,7 @@ if [[ "$SIGNATURE" == *"Authority=Apple Development:"* ]]; then
     printf 'Development signing is not Gatekeeper approval. For an explicitly unnotarized alpha, set REPRISE_ALLOW_DEVELOPMENT_RELEASE=1 and disclose the installation limitation.\n' >&2
     exit 1
   }
-  printf 'WARNING: development-signed alpha; macOS can reject downloaded installation. No notarization or Gatekeeper acceptance is claimed.\n' >&2
+  printf 'WARNING: development-signed alpha; macOS can block launch. No notarization, Gatekeeper acceptance, or end-to-end installation is claimed.\n' >&2
 else
   /usr/bin/xcrun stapler validate "$APP"
   /usr/sbin/spctl --assess --type execute --verbose=2 "$APP"
@@ -35,6 +35,7 @@ mkdir -p "$STAGE/image" "$STAGE/feed"
 /usr/bin/ditto --noextattr --noqtn "$APP" "$STAGE/image/Reprise.app"
 /usr/bin/codesign --verify --deep --strict "$STAGE/image/Reprise.app"
 ln -s /Applications "$STAGE/image/Applications"
+cp "$ROOT/Resources/INSTALL.txt" "$STAGE/image/INSTALL.txt"
 BASE="Reprise-$VERSION-$ARCH"
 /usr/bin/ditto -c -k --keepParent --noextattr --norsrc "$STAGE/image/Reprise.app" "$OUTPUT/$BASE.zip"
 /usr/bin/hdiutil create -volname Reprise -srcfolder "$STAGE/image" -format UDZO "$OUTPUT/$BASE.dmg"

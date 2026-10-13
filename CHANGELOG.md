@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0-alpha.2
+
+- Fix the MCP result initializer for the Swift toolchain used by GitHub Actions.
+- Build each app in a fresh staging bundle before replacing the local artifact.
+- Include explicit copy-and-open instructions in the DMG and distinguish copying
+  failures from first-launch Gatekeeper approval.
+- Publish new versioned DMG and ZIP downloads without replacing alpha.1 assets.
+
+The reported installation interruption has not yet been reproduced or resolved.
+This remains an Apple Development-signed, unnotarized alpha, not a notarization fix.
+
 ## 0.4.0-alpha.1
 
 First public alpha.

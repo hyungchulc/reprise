@@ -1,0 +1,26 @@
+Reprise Alpha
+
+1. Quit any running copy of Reprise to finish active recordings.
+2. Drag Reprise.app to the Applications folder beside it, or copy it to
+   your own ~/Applications folder if that is where your existing copy lives.
+3. Open the copied app from that folder, not from this disk image.
+4. Eject this disk image after copying is complete.
+
+This disk image contains the app and a folder shortcut, not an installer.
+The ZIP download on GitHub contains the same signed app.
+
+If copying fails, keep the exact error and report which step failed.
+An Open Anyway exception concerns a blocked launch; it does not repair a
+failed copy or installation. No workaround for a copy failure is implied.
+
+This alpha is signed with an Apple Development certificate, but is not
+Developer ID signed or Apple-notarized. macOS may block its first launch.
+Only after copying succeeds, and only if you trust the source, use the
+normal per-app option in System Settings > Privacy & Security when offered.
+Do not disable system protection or remove quarantine attributes.
+
+Downloads and SHA-256 checksums:
+https://github.com/hyungchulc/reprise/releases
+
+Troubleshooting and issue reports:
+https://github.com/hyungchulc/reprise/issues

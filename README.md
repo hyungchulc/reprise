@@ -35,12 +35,16 @@ permission and restart. Reprise never edits the system permission database.
 ### If macOS Cannot Verify The App
 
 This alpha's Apple Development signature is **not Developer ID distribution
-approval**. macOS can refuse downloaded installation even when the archive checksum
-and code signature are valid. Re-downloading the same release does not resolve
-missing notarization; the ZIP contains the same app as the DMG.
+approval**. macOS may block the initial launch even when the archive checksum and
+code signature are valid. The DMG contains the app and an Applications shortcut,
+not a separate installer; the ZIP contains the same app.
 
-If the DMG installation is blocked, the ZIP lets you extract the app and move it
-manually. After attempting to open that copy, use the per-app **Open Anyway** option
+**A failed copy or installation is a separate issue.** If the app cannot be moved
+to your chosen Applications folder, report the exact alert and step. Open Anyway
+is not a fix for a failed copy. An installation interruption has been reported and
+its cause is still under investigation; alpha.2 does not claim to resolve it.
+
+After copying succeeds and you attempt to open that copy, use **Open Anyway**
 only if you trust this source and macOS offers it. This is a user-granted exception,
 not a verified or notarized installation. If no exception is offered or the system
 reports malware, stop and report the exact alert. Do not disable system protection

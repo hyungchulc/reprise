@@ -63,7 +63,7 @@ reuse or request the maintainer's private key.
 Normal packaging requires a Developer ID signed app with a valid stapled ticket
 and a passing Gatekeeper assessment. A deliberately development-signed alpha must
 instead opt in with `REPRISE_ALLOW_DEVELOPMENT_RELEASE=1`; this preserves the Apple
-signature but does not satisfy downloaded-installation policy. Free Apple Accounts
+signature but does not grant Gatekeeper approval. Free Apple Accounts
 cannot supply Developer ID signing or notarization. Disclose this prominently and
 do not treat `codesign --verify` or the package smoke check as installation proof.
 
@@ -76,11 +76,17 @@ replace Apple notarization.
 
 The tool bootstrap pins Sparkle 2.10.0 and verifies its release archive SHA-256.
 Packaging preserves the Apple signature, includes the app and Applications link in
-a DMG, creates a ZIP, signs the update archive/feed, and writes `SHA256SUMS` under
+a DMG with copy instructions, creates a ZIP, signs the update archive/feed, and writes `SHA256SUMS` under
 `dist/releases/vVERSION`. No vault, auth state, private keys or research artifacts
 are copied. It refuses ad-hoc public releases and existing version directories.
 `REPRISE_GITHUB_REPOSITORY` and `REPRISE_SPARKLE_ACCOUNT` support fork release setup;
 they must match the fork's app configuration.
+
+Check the final DMG by mounting it read-only at a temporary mount point, copying
+its app to a temporary directory, and validating the copied code signature. Check
+the ZIP after extraction as well. This proves archive readability and a file-copy
+round trip, not Finder installation or Gatekeeper approval. Do not describe an
+unresolved copy/installation failure as fixed by Open Anyway or by repackaging.
 
 ## Publish
 

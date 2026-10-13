@@ -7,7 +7,9 @@ case "$MODE" in run|--verify|--install|--build|--debug|--logs|--telemetry) ;; *)
 swift build -c release
 BIN_DIR="$(swift build -c release --show-bin-path)"
 BIN="$BIN_DIR/Reprise"
-APP="$ROOT/dist/Reprise.app"
+STAGE="$(mktemp -d "$ROOT/.build/reprise-build.XXXXXX")"
+trap 'rm -rf "$STAGE"' EXIT
+APP="$STAGE/Reprise.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$BIN" "$APP/Contents/MacOS/Reprise"
 cp "$BIN_DIR/RepriseMCP" "$APP/Contents/MacOS/RepriseMCP"
@@ -53,6 +55,15 @@ done
 /usr/bin/codesign --force "${SIGN_OPTIONS[@]}" --entitlements "$ROOT/Resources/Reprise.entitlements" --sign "$IDENTITY" "$APP"
 /usr/bin/codesign --verify --deep --strict "$APP"
 "$APP/Contents/MacOS/Reprise" --check-package
+mkdir -p "$ROOT/dist"
+if [[ -e "$ROOT/dist/Reprise.app" ]]; then
+  mv "$ROOT/dist/Reprise.app" "$STAGE/previous.app"
+fi
+if ! mv "$APP" "$ROOT/dist/Reprise.app"; then
+  if [[ -e "$STAGE/previous.app" ]]; then mv "$STAGE/previous.app" "$ROOT/dist/Reprise.app"; fi
+  exit 1
+fi
+APP="$ROOT/dist/Reprise.app"
 case "$MODE" in
   --build) printf '%s\n' "$APP" ;;
   --install)
