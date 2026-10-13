@@ -32,6 +32,23 @@ Gatekeeper 경고가 표시되면 릴리스와 체크섬을 확인한 후 정상
 Gatekeeper를 시스템 전체에서 비활성화하지 마세요. 서명 주체가 바뀌면 캡처 권한을
 다시 허용하고 재시작해야 할 수 있습니다. Reprise는 시스템 권한 데이터베이스를 수정하지 않습니다.
 
+### macOS가 앱을 확인할 수 없다고 표시하는 경우
+
+이 알파의 Apple Development 서명은 **Developer ID 배포 승인과 다릅니다.**
+배포 파일의 체크섬과 코드 서명이 유효해도 macOS가 다운로드한 앱의 설치를 거부할 수 있습니다.
+같은 릴리스를 다시 다운로드해도 누락된 공증은 해결되지 않습니다. ZIP과 DMG에는 같은 앱이 들어 있습니다.
+
+DMG 설치가 차단되면 ZIP에서 앱을 추출해 직접 옮길 수 있습니다. 옮긴 앱의 실행을 시도한 뒤,
+이 소스를 신뢰하고 macOS가 해당 옵션을 제공하는 경우에만 앱별 **확인 없이 열기**를 이용하세요.
+이는 사용자가 허용하는 예외이며, 검증이나 공증을 받은 설치가 아닙니다.
+예외 옵션이 없거나 시스템이 악성코드를 알리면 중단하고 정확한 경고를 알려주세요.
+시스템 보호를 끄거나 격리 속성을 제거하지 마세요.
+[Apple 안내](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac)를 참고하세요.
+
+검토한 소스를 로컬에서 빌드하는 것도 개발용 선택지입니다. 무료 Apple 계정은 Developer ID
+배포 서명이나 공증을 제공하지 않으며, 해당 기능에는 Apple Developer Program 회원 자격이 필요합니다.
+이 릴리스는 지원 대상 macOS 전체에서 다운로드 설치 검증을 마쳤다고 주장하지 않습니다.
+
 ## 주요 기능
 
 | 영역 | 알파 기능 |
@@ -121,6 +138,7 @@ CPU와 프로세스 메모리 사용량은 표시하지만 GPU 사용량은 측�
 
 macOS 26 SDK가 포함된 Xcode 26 이상과 Swift Package Manager를 사용합니다.
 소스는 macOS 14 이상을 대상으로 하며, 의존성 버전은 `Package.resolved`에 고정되어 있습니다.
+첫 알파 태그 이후 적용한 Swift 도구 체인 호환성 수정은 `main` 브랜치에 있습니다.
 
 ```sh
 git clone https://github.com/hyungchulc/reprise.git

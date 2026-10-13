@@ -60,6 +60,20 @@ reuse or request the maintainer's private key.
 ./script/package_release.sh
 ```
 
+Normal packaging requires a Developer ID signed app with a valid stapled ticket
+and a passing Gatekeeper assessment. A deliberately development-signed alpha must
+instead opt in with `REPRISE_ALLOW_DEVELOPMENT_RELEASE=1`; this preserves the Apple
+signature but does not satisfy downloaded-installation policy. Free Apple Accounts
+cannot supply Developer ID signing or notarization. Disclose this prominently and
+do not treat `codesign --verify` or the package smoke check as installation proof.
+
+Before publishing, assess the exact final bundle with `syspolicy_check distribution`
+and test a browser-downloaded artifact on a disposable setup. Record any denial
+separately from signature integrity. Do not remove quarantine, disable Gatekeeper,
+or silently substitute a local unquarantined build for this test. A checksum-matching
+download can still fail system policy. The app updater's Ed25519 signature does not
+replace Apple notarization.
+
 The tool bootstrap pins Sparkle 2.10.0 and verifies its release archive SHA-256.
 Packaging preserves the Apple signature, includes the app and Applications link in
 a DMG, creates a ZIP, signs the update archive/feed, and writes `SHA256SUMS` under

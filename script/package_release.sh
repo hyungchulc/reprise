@@ -11,6 +11,16 @@ SIGNATURE="$(/usr/bin/codesign -dv --verbose=2 "$APP" 2>&1)"
 [[ "$SIGNATURE" == *"Authority=Apple Development:"* || "$SIGNATURE" == *"Authority=Developer ID Application:"* ]] || {
   printf 'Public releases require an Apple signing identity, not ad-hoc signing.\n' >&2; exit 1;
 }
+if [[ "$SIGNATURE" == *"Authority=Apple Development:"* ]]; then
+  [[ "${REPRISE_ALLOW_DEVELOPMENT_RELEASE:-0}" == "1" ]] || {
+    printf 'Development signing is not Gatekeeper approval. For an explicitly unnotarized alpha, set REPRISE_ALLOW_DEVELOPMENT_RELEASE=1 and disclose the installation limitation.\n' >&2
+    exit 1
+  }
+  printf 'WARNING: development-signed alpha; macOS can reject downloaded installation. No notarization or Gatekeeper acceptance is claimed.\n' >&2
+else
+  /usr/bin/xcrun stapler validate "$APP"
+  /usr/sbin/spctl --assess --type execute --verbose=2 "$APP"
+fi
 "$APP/Contents/MacOS/Reprise" --check-package
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+[-a-zA-Z0-9.]*$ ]] || { printf 'Invalid release version.\n' >&2; exit 1; }

@@ -32,6 +32,25 @@ the normal **System Settings > Privacy & Security > Open Anyway** flow. Do not
 disable Gatekeeper globally. A signing-identity change may require a fresh capture
 permission and restart. Reprise never edits the system permission database.
 
+### If macOS Cannot Verify The App
+
+This alpha's Apple Development signature is **not Developer ID distribution
+approval**. macOS can refuse downloaded installation even when the archive checksum
+and code signature are valid. Re-downloading the same release does not resolve
+missing notarization; the ZIP contains the same app as the DMG.
+
+If the DMG installation is blocked, the ZIP lets you extract the app and move it
+manually. After attempting to open that copy, use the per-app **Open Anyway** option
+only if you trust this source and macOS offers it. This is a user-granted exception,
+not a verified or notarized installation. If no exception is offered or the system
+reports malware, stop and report the exact alert. Do not disable system protection
+or remove quarantine attributes. See [Apple's guidance](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac).
+
+Building the reviewed source locally is another development option. Free Apple
+Accounts do not provide Developer ID distribution signing or notarization, which
+require Apple Developer Program membership. This release does not claim a clean
+downloaded-installation test on every supported macOS version.
+
 ## What It Does
 
 | Area | Alpha functionality |
@@ -123,6 +142,7 @@ permission behavior can still require user attention during alpha development.
 
 Use Xcode 26 or newer with the macOS 26 SDK and Swift Package Manager. The source
 targets macOS 14+. Dependencies are pinned in `Package.resolved`.
+Use `main` for the Swift toolchain compatibility fix made after the first alpha tag.
 
 ```sh
 git clone https://github.com/hyungchulc/reprise.git
