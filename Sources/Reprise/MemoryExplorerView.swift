@@ -127,7 +127,7 @@ struct MemoryExplorerView: View {
         .onChange(of: searchExpanded) { _, expanded in
             if !expanded { searchFocused = false; audio.pause() }
         }
-        .task(id: model.selection?.id) { await audio.load(moment: model.selection, root: model.root) }
+        .task(id: model.selection?.id) { await audio.load(moment: model.selection, root: model.root, cipher: model.cipher) }
         .onDisappear { audio.unload() }
         .onReceive(NotificationCenter.default.publisher(for: .repriseFocusSearch)) { _ in
             searchExpanded = true
@@ -185,7 +185,7 @@ struct MemoryExplorerView: View {
             if moment.kind == "meeting" {
                 Color.clear
             } else {
-                MemoryImage(screenOf: moment, root: model.root,
+                MemoryImage(screenOf: moment, root: model.root, cipher: model.cipher,
                             maxPixels: min(8192, Int((max(size.width, size.height) * displayScale * zoom).rounded(.up))),
                             keepsPreviousImage: true)
                     .frame(width: size.width * zoom, height: size.height * zoom)
@@ -272,7 +272,7 @@ struct MemoryExplorerView: View {
                                         VStack(alignment: .leading, spacing: 6) {
                                             Group {
                                                 if moment.kind == "meeting" { Image(systemName: "waveform").font(.system(size: 32)).foregroundStyle(Color.accentColor).frame(maxWidth: .infinity, maxHeight: .infinity).background(.quaternary) }
-                                                else { MemoryImage(path: moment.thumbnailPath, root: model.root, maxPixels: 480) }
+                                                else { MemoryImage(path: moment.thumbnailPath, root: model.root, cipher: model.cipher, maxPixels: 480) }
                                             }.aspectRatio(1.6, contentMode: .fit).clipped()
                                                 .overlay { RoundedRectangle(cornerRadius: 4).stroke(moment.id == model.selection?.id ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: moment.id == model.selection?.id ? 2 : 1) }
                                             Text(moment.windowTitle.isEmpty ? moment.appName : moment.windowTitle).repriseFont(.heading).lineLimit(1)

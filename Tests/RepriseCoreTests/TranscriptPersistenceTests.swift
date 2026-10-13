@@ -1,4 +1,4 @@
-import CSQLite
+import SQLCipher
 import XCTest
 @testable import RepriseCore
 
@@ -18,7 +18,10 @@ final class TranscriptPersistenceTests: XCTestCase {
             """
         XCTAssertEqual(sqlite3_exec(database, sql, nil, nil, nil), SQLITE_OK)
         sqlite3_close(database)
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
+        XCTAssertTrue(store.convertedFromPlaintext)
+        XCTAssertFalse(MomentStore.isPlaintextDatabase(root.appendingPathComponent("library.sqlite").path))
+        XCTAssertNil(FileManager.default.contents(atPath: root.appendingPathComponent("library.sqlite").path)?.range(of: Data("Saved transcript".utf8)))
         let old = try await store.moment(id: "legacy")
         XCTAssertEqual(old?.text, "Saved transcript")
         XCTAssertEqual(old?.videoPath, "meetings/old.m4a")
@@ -27,7 +30,7 @@ final class TranscriptPersistenceTests: XCTestCase {
         let cues = [TranscriptSegment(start: 2, end: 12, text: "First sentence"), TranscriptSegment(start: 54, end: 78, text: "Later chunk")]
         let timed = Moment(id: "timed", appName: "Meeting", text: "First sentence\nLater chunk", kind: "meeting", audioDuration: 80, transcriptSegments: cues)
         try await store.insert(timed)
-        let reopened = try MomentStore(root: root)
+        let reopened = try MomentStore(root: root, keys: testKeys)
         let stored = try await reopened.moment(id: "timed")
         XCTAssertEqual(stored?.transcriptSegments, cues)
         XCTAssertEqual(stored?.audioDuration, 80)

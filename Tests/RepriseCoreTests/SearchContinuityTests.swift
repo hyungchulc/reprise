@@ -5,7 +5,7 @@ final class SearchContinuityTests: XCTestCase {
     func testOverviewConversationRestoresEvidenceBeyondTwoHundredIDs() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-history-overview-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         var turns: [MemorySearchTurn] = []
         for turn in 0..<3 {
             var citations: [AICitation] = []
@@ -26,7 +26,7 @@ final class SearchContinuityTests: XCTestCase {
     func testSavedAnswerSurvivesReopenWithoutNewSearchOrUsage() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-history-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         let first = Moment(id: "first", appName: "Meeting", text: "Original evidence", kind: "meeting")
         let second = Moment(id: "second", appName: "Meeting", text: "Second evidence", kind: "meeting")
         for moment in [first, second] { try await store.insert(moment) }
@@ -34,8 +34,8 @@ final class SearchContinuityTests: XCTestCase {
         var history = SearchHistory()
         let turns = [MemorySearchTurn(question: "meeting notes", response: response), MemorySearchTurn(question: "what happened next?", response: response)]
         history.record("meeting notes", result: SavedSearchResult(response: response, moments: [second, first], appName: "Meeting", kind: "meeting", turns: turns))
-        try history.save(root: root)
-        let saved = try XCTUnwrap(SearchHistory.load(root: root).result(for: "MEETING notes"))
+        try history.save(root: root, cipher: testKeys.cipher)
+        let saved = try XCTUnwrap(SearchHistory.load(root: root, cipher: testKeys.cipher).result(for: "MEETING notes"))
         let restored = try await saved.restore(from: store)
         XCTAssertEqual(restored.response, response)
         XCTAssertEqual(restored.turns, turns)
@@ -72,21 +72,21 @@ final class SearchContinuityTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         var history = SearchHistory()
         for query in ["first", "second", "third", "fourth", " SECOND ", "   "] { history.record(query) }
-        try history.save(root: root)
-        XCTAssertEqual(SearchHistory.load(root: root).queries, ["SECOND", "fourth", "third"])
-        XCTAssertTrue(SearchHistory.load(root: root.appendingPathComponent("other-vault")).queries.isEmpty)
+        try history.save(root: root, cipher: testKeys.cipher)
+        XCTAssertEqual(SearchHistory.load(root: root, cipher: testKeys.cipher).queries, ["SECOND", "fourth", "third"])
+        XCTAssertTrue(SearchHistory.load(root: root.appendingPathComponent("other-vault"), cipher: testKeys.cipher).queries.isEmpty)
     }
 
     func testOldIndexedMemoriesSurviveReopenAndRankAboveRecentNoise() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-continuity-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         let old = Moment(id: "old", timestamp: Date(timeIntervalSince1970: 100.125), appName: "Fixture", windowTitle: "marigold", text: "marigold validation")
         try await store.insert(old)
         for index in 0..<240 {
             try await store.insert(Moment(id: "recent-\(index)", timestamp: Date(timeIntervalSince1970: 500 + Double(index * 3)), appName: "Fixture", text: "marigold " + String(repeating: "unrelated ", count: 40)))
         }
-        let reopened = try MomentStore(root: root)
+        let reopened = try MomentStore(root: root, keys: testKeys)
         let stats = try await reopened.stats()
         XCTAssertEqual(stats.momentCount, 241)
         XCTAssertEqual(stats.oldest, old.timestamp)
@@ -105,7 +105,7 @@ final class SearchContinuityTests: XCTestCase {
     func testSkipMovesThirtySecondsAndClampsAtLibraryEnds() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-skip-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         var moments: [Moment] = []
         for index in 0...30 {
             let moment = Moment(id: "frame-\(index)", timestamp: Date(timeIntervalSince1970: Double(index * 3)), appName: "Fixture")

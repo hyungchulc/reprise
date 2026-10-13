@@ -11,6 +11,7 @@ final class MemoryAudioPlayer: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var error: String?
     private var player: AVPlayer?
+    private var media: VaultAsset?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
     private var statusObserver: NSKeyValueObservation?
@@ -20,7 +21,7 @@ final class MemoryAudioPlayer: ObservableObject {
 
     var canPlay: Bool { player != nil && error == nil && duration > 0 }
 
-    func load(moment: Moment?, root: URL) async {
+    func load(moment: Moment?, root: URL, cipher: VaultCipher) async {
         unload()
         guard let moment, moment.kind == "meeting" else { return }
         guard let path = moment.videoPath, !path.isEmpty else { error = "This memory has no audio file."; return }
@@ -33,7 +34,9 @@ final class MemoryAudioPlayer: ObservableObject {
         isLoading = true
         defer { if generation == token { isLoading = false } }
         do {
-            let asset = AVURLAsset(url: url)
+            // A sealed recording is decrypted range by range as it plays.
+            let media = try VaultAsset(url: url, cipher: cipher)
+            let asset = media.asset
             let seconds = try await asset.load(.duration).seconds
             guard seconds.isFinite, seconds > 0, try await asset.load(.isPlayable),
                   !(try await asset.loadTracks(withMediaType: .audio)).isEmpty else {
@@ -43,6 +46,7 @@ final class MemoryAudioPlayer: ObservableObject {
             guard generation == token else { return }
             let item = AVPlayerItem(asset: asset)
             let player = AVPlayer(playerItem: item)
+            self.media = media
             player.actionAtItemEnd = .pause
             self.player = player
             duration = seconds
@@ -111,7 +115,7 @@ final class MemoryAudioPlayer: ObservableObject {
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         statusObserver?.invalidate()
         timeObserver = nil; endObserver = nil; statusObserver = nil
-        player?.replaceCurrentItem(with: nil); player = nil
+        player?.replaceCurrentItem(with: nil); player = nil; media = nil
         duration = 0; position = 0; error = nil; isLoading = false; scrubbing = false
     }
 

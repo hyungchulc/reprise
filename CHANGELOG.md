@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.0-alpha.1
+
+- The vault is encrypted. The database moves to SQLCipher (AES-256 with per-page HMAC,
+  full-text search unchanged), and screenshots, thumbnails, imports, compressed screen
+  movies, meeting recordings and search history are sealed with AES-256-GCM. New
+  screens are encoded in memory and written only sealed; compressed movies are sealed
+  fragment by fragment as they are encoded.
+- One random key per library lives in the login keychain as “Reprise Vault Key”.
+  Reprise and its MCP helper read it without asking; macOS asks you before any other
+  program can. Deny such a request unless you started it.
+- The first launch converts the existing library: the encrypted database is checked
+  against the original before it replaces it, and older media are sealed in the
+  background within a minute or two. A copy of a real library (3,500 memories,
+  3,900 files, 440 MB) converted in about 8 seconds.
+- MCP consent is signed with a keychain-derived key, so another program can no longer
+  enable MCP access by editing `mcp-access.json`. The current setting is kept once
+  during conversion. Restart MCP clients after updating so they launch the new helper.
+- Meeting recordings are sealed when recording stops and are transcribed from the
+  sealed file; playback and screen decoding read sealed files without plaintext copies.
+- A library that cannot be opened, for example because its key is missing, now shows
+  an explanation instead of crashing at launch.
+
+`sqlite3`, Quick Look and other apps can no longer open vault files. If the login
+keychain is reset, the vault cannot be decrypted. Apple Development signing and the
+Sparkle public key are unchanged; this release is still unnotarized.
+
 ## 0.5.0-alpha.1
 
 - Multilingual meeting transcription. Choose up to five languages in Audio settings.

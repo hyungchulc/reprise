@@ -12,13 +12,13 @@ final class MomentStoreTests: XCTestCase {
 
     func testPersistenceTimeRangeReopeningAndBookmarkCache() async throws {
         let root = try temporaryRoot()
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
         let first = Moment(id: "first", timestamp: timestamp, appName: "Editor", text: "original text\0tail", videoPath: "clips/meeting.mov", videoOffset: 4.5, kind: "meeting", byteCount: 12)
         try await store.insert(first)
         try await store.insert(Moment(id: "later", timestamp: timestamp.addingTimeInterval(1), appName: "Browser", text: "later text"))
         _ = try await store.moment(id: "first")
-        let reopened = try MomentStore(root: root)
+        let reopened = try MomentStore(root: root, keys: testKeys)
         let found = try await reopened.moment(id: "first")
         XCTAssertEqual(found, first)
         let range = try await reopened.query(MomentQuery(since: timestamp, until: timestamp))
@@ -77,7 +77,7 @@ final class MomentStoreTests: XCTestCase {
     }
 
     func testSearchTreatsOperatorsQuotesAndPunctuationAsLiteralTokens() async throws {
-        let store = try MomentStore(root: temporaryRoot())
+        let store = try MomentStore(root: temporaryRoot(), keys: testKeys)
         try await store.insert(Moment(id: "literal", appName: "Notes", windowTitle: "Plan", text: "alpha OR beta don't 안녕"))
         try await store.insert(Moment(id: "other", appName: "Notes", text: "alpha gamma"))
         let operators = try await store.query(MomentQuery(text: "alpha OR beta"))
@@ -96,7 +96,7 @@ final class MomentStoreTests: XCTestCase {
     func testDeletionPreservesSharedMediaAndRejectsEscapesIncludingReplacedSymlink() async throws {
         let root = try temporaryRoot()
         let outside = try temporaryRoot()
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         let shared = root.appendingPathComponent("shared.bin")
         try Data([1, 2, 3]).write(to: shared)
         try await store.insert(Moment(id: "a", appName: "Test", imagePath: "./shared.bin"))
@@ -128,7 +128,7 @@ final class MomentStoreTests: XCTestCase {
 
     func testRetentionAndBudgetPreserveBookmarksAndReportStats() async throws {
         let root = try temporaryRoot()
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         let now = Date()
         try await store.insert(Moment(id: "old", timestamp: now.addingTimeInterval(-10 * 86_400), appName: "A", byteCount: 50))
         try await store.insert(Moment(id: "bookmark", timestamp: now.addingTimeInterval(-20 * 86_400), appName: "B", isBookmarked: true, byteCount: 30))
@@ -150,7 +150,7 @@ final class MomentStoreTests: XCTestCase {
 
     func testUsageUnknownMetricsAndExportAllPagesWithFilters() async throws {
         let root = try temporaryRoot()
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         try await store.recordUsage(UsageEntry(id: "unknown", timestamp: date, provider: "local", model: "test", durationSeconds: 1.25, succeeded: false))
         try await store.recordUsage(UsageEntry(id: "measured", timestamp: date.addingTimeInterval(1), provider: "local", model: "test", inputTokens: 123, outputTokens: 45, costUSD: 0.5))

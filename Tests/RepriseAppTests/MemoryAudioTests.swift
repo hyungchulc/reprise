@@ -19,11 +19,11 @@ final class MemoryAudioTests: XCTestCase {
         let moment = Moment(appName: "Meeting", windowTitle: "Synthetic recording", text: "Synthetic transcript", videoPath: "silence.wav", kind: "meeting")
         let audio = MemoryAudioPlayer()
         defer { audio.unload() }
-        await audio.load(moment: moment, root: root)
+        await audio.load(moment: moment, root: root, cipher: testKeys.cipher)
         XCTAssertTrue(audio.canPlay, audio.error ?? "Audio unavailable")
         XCTAssertEqual(audio.duration, 2, accuracy: 0.01)
         XCTAssertFalse(audio.isPlaying, "Opening a recording must not auto-play")
-        let recorder = MeetingRecorder(store: try MomentStore(root: root), root: root, languages: SpeechLanguages())
+        let recorder = MeetingRecorder(store: try MomentStore(root: root, keys: testKeys), root: root, languages: SpeechLanguages())
         let view = NSHostingView(rootView: MemoryAudioPanel(moment: moment, audio: audio, recorder: recorder, transcriptExpanded: .constant(true), transcriptHeight: 160))
         view.frame = NSRect(x: 0, y: 0, width: 620, height: 260)
         view.layoutSubtreeIfNeeded()
@@ -33,7 +33,12 @@ final class MemoryAudioTests: XCTestCase {
         audio.seek(to: .nan); XCTAssertEqual(audio.position, 0)
         audio.togglePlayback(); XCTAssertTrue(audio.isPlaying)
         audio.pause(); XCTAssertFalse(audio.isPlaying)
-        await audio.load(moment: Moment(appName: "Screen"), root: root)
+        // A sealed recording plays through the vault reader without a plaintext copy.
+        XCTAssertTrue(try testKeys.cipher.sealFile(at: url))
+        await audio.load(moment: moment, root: root, cipher: testKeys.cipher)
+        XCTAssertTrue(audio.canPlay, audio.error ?? "Sealed audio unavailable")
+        XCTAssertEqual(audio.duration, 2, accuracy: 0.01)
+        await audio.load(moment: Moment(appName: "Screen"), root: root, cipher: testKeys.cipher)
         XCTAssertFalse(audio.canPlay)
         XCTAssertEqual(audio.duration, 0)
         XCTAssertFalse(audio.isPlaying)
@@ -47,7 +52,7 @@ final class MemoryAudioTests: XCTestCase {
         let audio = MemoryAudioPlayer()
         defer { audio.unload() }
         for path in ["missing.m4a", "bad.m4a", "../outside.m4a"] {
-            await audio.load(moment: Moment(appName: "Meeting", videoPath: path, kind: "meeting"), root: root)
+            await audio.load(moment: Moment(appName: "Meeting", videoPath: path, kind: "meeting"), root: root, cipher: testKeys.cipher)
             XCTAssertFalse(audio.canPlay)
             XCTAssertNotNil(audio.error)
             XCTAssertFalse(audio.isLoading)
@@ -65,8 +70,8 @@ final class MemoryAudioTests: XCTestCase {
         var history = SearchHistory()
         history.record("original question", result: SavedSearchResult(response: response, moments: [memory], appName: "Meeting", kind: "meeting"))
         history.record("legacy question")
-        try history.save(root: root)
-        let model = try AppModel(root: root)
+        try history.save(root: root, cipher: testKeys.cipher)
+        let model = try AppModel(root: root, keys: testKeys)
         defer { model.shutdown() }
         try await model.store.insert(memory)
         model.provider.executablePath = "/nonexistent/no-inference-allowed"

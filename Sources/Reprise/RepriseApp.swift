@@ -8,8 +8,18 @@ struct RepriseApp: App {
     @StateObject private var model: AppModel
     init() {
         if CommandLine.arguments.dropFirst() == ["--check-package"] { PackageCheck.run() }
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--check-vault" { VaultCheck.run(path: CommandLine.arguments[2]) }
         do { let instance = try AppModel(); _model = StateObject(wrappedValue: instance); AppRuntime.model = instance }
-        catch { fatalError("Unable to open Reprise library: \(error.localizedDescription)") }
+        catch {
+            // A missing key or a refused keychain read must not become a crash loop.
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "Reprise could not open its library"
+            alert.informativeText = error.localizedDescription
+            alert.addButton(withTitle: "Quit")
+            alert.runModal()
+            exit(1)
+        }
     }
     var body: some Scene {
         // Settings belongs to the memory panel's sheet, not a second launch scene.

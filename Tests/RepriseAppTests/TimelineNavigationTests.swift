@@ -15,7 +15,7 @@ final class TimelineNavigationTests: XCTestCase {
     @MainActor func testContinuousInputLoadsOlderHistoryBeforeGestureEnds() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let model = try AppModel(root: root)
+        let model = try AppModel(root: root, keys: testKeys)
         defer { model.shutdown() }
         for index in 0..<360 {
             try await model.store.insert(Moment(id: "frame-\(index)", timestamp: Date(timeIntervalSince1970: Double(index * 10)), appName: "Fixture"))
@@ -39,7 +39,7 @@ final class TimelineNavigationTests: XCTestCase {
     @MainActor func testCursorAccumulatesAcrossSparseFramesAndReversesAtBounds() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let model = try AppModel(root: root)
+        let model = try AppModel(root: root, keys: testKeys)
         defer { model.shutdown() }
         for time in [0, 200] {
             try await model.store.insert(Moment(id: "frame-\(time)", timestamp: Date(timeIntervalSince1970: Double(time)), appName: "Fixture"))
@@ -63,7 +63,7 @@ final class TimelineNavigationTests: XCTestCase {
     @MainActor func testLongRecordingGapMovesDirectlyToAdjacentSession() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let model = try AppModel(root: root)
+        let model = try AppModel(root: root, keys: testKeys)
         defer { model.shutdown() }
         for time in [0, 30, 32_730, 32_760] {
             try await model.store.insert(Moment(id: "frame-\(time)", timestamp: Date(timeIntervalSince1970: Double(time)), appName: "Fixture"))
@@ -84,7 +84,7 @@ final class TimelineNavigationTests: XCTestCase {
     @MainActor func testOverviewFillsBothViewportSidesBeyondPreviewWindow() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let model = try AppModel(root: root)
+        let model = try AppModel(root: root, keys: testKeys)
         defer { model.shutdown() }
         model.setTimelineViewport(width: 2_000)
         for index in 0..<1_200 {
@@ -103,7 +103,7 @@ final class TimelineNavigationTests: XCTestCase {
     @MainActor func testManualSelectionWinsOverPendingHistoryLoad() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let model = try AppModel(root: root)
+        let model = try AppModel(root: root, keys: testKeys)
         defer { model.shutdown() }
         for index in 0..<250 {
             try await model.store.insert(Moment(id: "frame-\(index)", timestamp: Date(timeIntervalSince1970: Double(index * 10)), appName: "Fixture"))

@@ -84,15 +84,19 @@ already-running helpers. Data already sent to a client cannot be recalled.
 
 ## Boundary And Troubleshooting
 
-The helper opens SQLite read-only with query-only mode and performs no migrations.
-Missing/old schemas must first be opened by the current Reprise app. Access settings
+The helper opens the encrypted database read-only with query-only mode and performs no
+migrations. It reads the library key from the login keychain, where its code signature
+is trusted, so no prompt appears. Missing/old schemas, and libraries from before
+encryption, must first be opened by the current Reprise app. After upgrading to 0.6,
+restart MCP clients so they launch the new helper. Access settings
 are checked before reading and after suspended work. Screenshots use root-relative
 stored paths and reject traversal, symlinks and oversized files. No tools expose
 recording, deletion, arbitrary SQL, shell commands or configuration changes.
 
 This is an application-level consent gate, **not an OS sandbox against other
-processes running as your macOS user**. The vault is unencrypted, and clients may
-retain tool results or transmit them to their providers. See [Privacy](PRIVACY.md).
+processes running as your macOS user**. The vault is encrypted and the consent file is
+signed, but a program you approve at the keychain prompt can read the key, and clients
+may retain tool results or transmit them to their providers. See [Privacy](PRIVACY.md).
 
 If the app moves or the vault changes, remove the old entry and install again from
 the new copy. A conflicting entry is not overwritten automatically. Close a client

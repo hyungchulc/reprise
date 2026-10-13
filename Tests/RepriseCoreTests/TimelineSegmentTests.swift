@@ -5,7 +5,7 @@ final class TimelineSegmentTests: XCTestCase {
     func testAudioKeepsDurationAndSeparateIdentityAcrossScreenCaptures() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-audio-rail-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         let start = Date(timeIntervalSince1970: 1000)
         let recording = Moment(id: "audio", timestamp: start, appName: "Meeting", kind: "meeting", audioDuration: 120)
         let second = Moment(id: "audio-2", timestamp: start.addingTimeInterval(120), appName: "Meeting", kind: "meeting", audioDuration: 30)
@@ -34,7 +34,7 @@ final class TimelineSegmentTests: XCTestCase {
     func testAdjacentPagingHandlesEqualTimestamps() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-adjacent-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         let timestamp = Date(timeIntervalSince1970: 1000)
         let a = Moment(id: "a", timestamp: timestamp, appName: "A")
         let b = Moment(id: "b", timestamp: timestamp, appName: "B")

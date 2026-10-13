@@ -115,9 +115,13 @@ require a remote HTTP server cannot connect directly. [Setup and tools](docs/MCP
 ## Local Data And Resource Use
 
 The default vault is `~/Library/Application Support/Reprise`. It is independent of
-the app version and contains SQLite, images, audio, transcripts, search history and
-usage. The folder is private to your macOS account, but **the vault is not
-application-encrypted**: other apps running as you can read it. Protect your Mac and backups.
+the app version and contains the database, images, audio, transcripts, search history
+and usage. Since 0.6 the vault is **encrypted**: the database with SQLCipher and every
+screenshot, movie and recording with AES-256-GCM. The key lives in your login keychain,
+where only Reprise and its MCP helper can read it without asking. If any other app asks
+macOS for “Reprise Vault Key”, deny it unless you started that request. Losing the
+login keychain loses the vault, so keep the Mac's keychain in your backups.
+[What encryption covers](docs/PRIVACY.md#encryption).
 Reprise does not bundle any recorded memories or credentials in its releases.
 
 Capture defaults to native Retina resolution, 85% image quality and a 3-second
@@ -173,7 +177,7 @@ update feed and public key before distribution. [Release procedure](docs/RELEASI
 
 ## Development And Reporting
 
-The app uses SwiftUI/AppKit, ScreenCaptureKit, Vision, Speech, AVFoundation, SQLite
+The app uses SwiftUI/AppKit, ScreenCaptureKit, Vision, Speech, AVFoundation, SQLCipher
 FTS5, the official MCP Swift SDK, and Sparkle. There is no bundled LLM, vector
 database or always-running inference service. [Architecture](docs/ARCHITECTURE.md).
 

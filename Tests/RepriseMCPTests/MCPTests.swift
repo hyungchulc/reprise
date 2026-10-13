@@ -13,25 +13,25 @@ final class MCPTests: XCTestCase {
 
     func testDefaultDenyDoesNotCreateLibraryAndLiveRevocation() async throws {
         let root = try fixture()
-        let service = MemoryTools(root: root)
+        let service = MemoryTools(root: root, keys: testKeys)
         let denied = await service.call(name: "reprise_library_status", arguments: [:])
         XCTAssertEqual(denied.isError, true)
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("library.sqlite").path))
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         try await store.insert(Moment(id: "one", appName: "Fixture", text: "unique fixture"))
-        try MCPAccess(enabled: true).save(root: root)
-        let enabled = MemoryTools(root: root)
+        try MCPAccess(enabled: true).save(root: root, keys: testKeys)
+        let enabled = MemoryTools(root: root, keys: testKeys)
         let found = await enabled.call(name: "reprise_search", arguments: ["text": "unique"])
         XCTAssertEqual(found.structuredContent?.objectValue?["memories"]?.arrayValue?.count, 1)
-        try MCPAccess().save(root: root)
+        try MCPAccess().save(root: root, keys: testKeys)
         let revoked = await enabled.call(name: "reprise_get_memory", arguments: ["id": "one"])
         XCTAssertEqual(revoked.isError, true)
     }
 
     func testTranscriptSearchPaginationAndLiveDatabaseChanges() async throws {
-        let root = try fixture(), store = try MomentStore(root: root)
-        try MCPAccess(enabled: true).save(root: root)
-        let service = MemoryTools(root: root)
+        let root = try fixture(), store = try MomentStore(root: root, keys: testKeys)
+        try MCPAccess(enabled: true).save(root: root, keys: testKeys)
+        let service = MemoryTools(root: root, keys: testKeys)
         for n in 0..<3 {
             try await store.insert(Moment(id: "audio\(n)", timestamp: Date(timeIntervalSince1970: Double(n)), appName: "Meeting",
                 text: "meeting transcript \(n)", videoPath: "audio/test.m4a", kind: "meeting",
@@ -51,12 +51,12 @@ final class MCPTests: XCTestCase {
     }
 
     func testFiltersInvalidArgumentsAndOverviewCoverage() async throws {
-        let root = try fixture(), store = try MomentStore(root: root)
-        try MCPAccess(enabled: true).save(root: root)
+        let root = try fixture(), store = try MomentStore(root: root, keys: testKeys)
+        try MCPAccess(enabled: true).save(root: root, keys: testKeys)
         for n in 0..<10 {
             try await store.insert(Moment(timestamp: Date(timeIntervalSince1970: Double(n * 3600)), appName: "Fixture", text: "example"))
         }
-        let service = MemoryTools(root: root)
+        let service = MemoryTools(root: root, keys: testKeys)
         let result = await service.call(name: "reprise_activity_overview", arguments: ["limit": 2])
         XCTAssertEqual(result.structuredContent?.objectValue?["coverage"]?.objectValue?["total_records"], .int(10))
         XCTAssertEqual(result.structuredContent?.objectValue?["memories"]?.arrayValue?.count, 2)
@@ -69,21 +69,47 @@ final class MCPTests: XCTestCase {
         XCTAssertEqual(excluded.structuredContent?.objectValue?["memories"]?.arrayValue?.count, 0)
     }
 
+    func testConsentEditedOutsideRepriseReadsAsOff() async throws {
+        let root = try fixture(), store = try MomentStore(root: root, keys: testKeys)
+        try await store.insert(Moment(id: "one", appName: "Fixture", text: "private fixture"))
+        let url = root.appendingPathComponent("mcp-access.json")
+        let service = MemoryTools(root: root, keys: testKeys)
+        // Settings from before encryption carry no signature: off until Reprise adopts them.
+        try Data(#"{"enabled":true,"allowImages":false}"#.utf8).write(to: url)
+        let unsigned = await service.call(name: "reprise_search", arguments: ["text": "private"])
+        XCTAssertEqual(unsigned.isError, true)
+        try MCPAccess.adoptUnsigned(root: root, keys: testKeys)
+        let adopted = await service.call(name: "reprise_search", arguments: ["text": "private"])
+        XCTAssertNotEqual(adopted.isError, true)
+        // Another program flipping a signed file does not grant access.
+        try MCPAccess(enabled: false).save(root: root, keys: testKeys)
+        var stored = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        stored["enabled"] = true
+        try JSONSerialization.data(withJSONObject: stored).write(to: url)
+        try MCPAccess.adoptUnsigned(root: root, keys: testKeys)
+        let edited = await service.call(name: "reprise_search", arguments: ["text": "private"])
+        XCTAssertEqual(edited.isError, true)
+        let foreign = await MemoryTools(root: root, keys: VaultKeys.ephemeral()).call(name: "reprise_library_status", arguments: [:])
+        XCTAssertEqual(foreign.isError, true)
+        let keyless = await MemoryTools(root: root, keys: nil).call(name: "reprise_library_status", arguments: [:])
+        XCTAssertEqual(keyless.isError, true)
+    }
+
     func testReadOnlyAndMediaPathGuards() async throws {
-        let root = try fixture(), writable = try MomentStore(root: root)
+        let root = try fixture(), writable = try MomentStore(root: root, keys: testKeys)
         try await writable.insert(Moment(id: "screen", appName: "Fixture", imagePath: "screen.jpg"))
-        let readOnly = try MomentStore(root: root, readOnly: true)
+        let readOnly = try MomentStore(root: root, readOnly: true, keys: testKeys)
         do { try await readOnly.insert(Moment(appName: "Forbidden")); XCTFail("Read-only connection allowed a write") } catch {}
         for path in ["../secret", "/etc/passwd", "library.sqlite"] {
             do { _ = try await readOnly.readMedia(path); XCTFail("Unsafe path read") } catch {}
         }
         try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("screen.jpg"), withDestinationURL: URL(fileURLWithPath: "/etc/hosts"))
         do { _ = try await readOnly.readMedia("screen.jpg"); XCTFail("Followed media symlink") } catch {}
-        try MCPAccess(enabled: true, allowImages: false).save(root: root)
-        let service = MemoryTools(root: root)
+        try MCPAccess(enabled: true, allowImages: false).save(root: root, keys: testKeys)
+        let service = MemoryTools(root: root, keys: testKeys)
         let image = await service.call(name: "reprise_get_screenshot", arguments: ["id": "screen"])
         XCTAssertEqual(image.isError, true)
-        try MCPAccess(enabled: true, allowImages: true).save(root: root)
+        try MCPAccess(enabled: true, allowImages: true).save(root: root, keys: testKeys)
         let unsafe = await service.call(name: "reprise_get_screenshot", arguments: ["id": "screen"])
         XCTAssertEqual(unsafe.isError, true)
     }

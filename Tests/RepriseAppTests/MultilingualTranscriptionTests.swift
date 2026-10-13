@@ -28,7 +28,9 @@ final class MultilingualTranscriptionTests: XCTestCase {
             try output?.write(from: buffer)
         }
         output = nil
-        let store = try MomentStore(root: root)
+        // Recordings are sealed before they are indexed; transcription reads the sealed file.
+        XCTAssertTrue(try testKeys.cipher.sealFile(at: audio))
+        let store = try MomentStore(root: root, keys: testKeys)
         let moment = Moment(appName: "Meeting", windowTitle: "Mixed", videoPath: "meetings/mixed.caf", kind: "meeting")
         try await store.insert(moment)
         let recorder = MeetingRecorder(store: store, root: root, languages: SpeechLanguages())

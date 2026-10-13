@@ -147,6 +147,10 @@ extension KeyedDecodingContainer {
 public enum ReprisePaths {
     public static var root: URL {
         if let custom = ProcessInfo.processInfo.environment["REPRISE_DATA_DIR"] { return URL(fileURLWithPath: custom) }
-        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Reprise", isDirectory: true)
+        return defaultRoot
+    }
+
+    public static var defaultRoot: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Reprise", isDirectory: true)
     }
 }

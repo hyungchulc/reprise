@@ -13,15 +13,16 @@ actor ImageCache {
         previews.totalCostLimit = 96 * 1024 * 1024; previews.countLimit = 4
         thumbnails.totalCostLimit = 8 * 1024 * 1024; thumbnails.countLimit = 100
     }
-    func image(url: URL, maxPixels: Int) async -> NSImage? {
+    func image(url: URL, cipher: VaultCipher, maxPixels: Int) async -> NSImage? {
         guard !Task.isCancelled else { return nil }
         let cache = maxPixels <= 512 ? thumbnails : previews
         let key = "\(url.absoluteString):\(maxPixels)" as NSString
         if let image = cache.object(forKey: key) { return image }
         let decoded: CGImage?
         if let frame = FrameArchive.frameReference(url) {
-            decoded = try? await reader(frame.movie, maxPixels: maxPixels).image(at: frame.offset)
-        } else if let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) {
+            decoded = try? await reader(frame.movie, cipher: cipher, maxPixels: maxPixels).image(at: frame.offset)
+        } else if let data = try? cipher.contents(of: url, maxBytes: 64 * 1024 * 1024),
+                  let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) {
             decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: maxPixels, kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
         } else { decoded = nil }
         guard let cgImage = decoded, !Task.isCancelled else { return nil }
@@ -31,13 +32,13 @@ actor ImageCache {
     }
 
     /// One decoder per recently viewed movie and size class, since scrubbing stays within a movie.
-    private func reader(_ movie: URL, maxPixels: Int) -> FrameReader {
+    private func reader(_ movie: URL, cipher: VaultCipher, maxPixels: Int) -> FrameReader {
         let limit = maxPixels <= 1024 ? 1024 : (maxPixels <= 2048 ? 2048 : 0)
         let key = "\(movie.path)|\(limit)"
         readerOrder.removeAll { $0 == key }
         readerOrder.append(key)
         if let reader = readers[key] { return reader }
-        let reader = FrameReader(movie: movie, maxPixels: limit)
+        let reader = FrameReader(movie: movie, cipher: cipher, maxPixels: limit)
         readers[key] = reader
         if readerOrder.count > 6 { readers.removeValue(forKey: readerOrder.removeFirst()) }
         return reader
@@ -69,16 +70,17 @@ struct MemoryImage: View {
     let root: URL
     let maxPixels: Int
     var keepsPreviousImage = false
-    @StateObject private var loader = MemoryImageLoader()
+    @StateObject private var loader: MemoryImageLoader
 
-    init(path: String, root: URL, maxPixels: Int, keepsPreviousImage: Bool = false) {
-        self.init(media: path.isEmpty ? nil : .still(path), root: root, maxPixels: maxPixels, keepsPreviousImage: keepsPreviousImage)
+    init(path: String, root: URL, cipher: VaultCipher, maxPixels: Int, keepsPreviousImage: Bool = false) {
+        self.init(media: path.isEmpty ? nil : .still(path), root: root, cipher: cipher, maxPixels: maxPixels, keepsPreviousImage: keepsPreviousImage)
     }
-    init(screenOf moment: Moment, root: URL, maxPixels: Int, keepsPreviousImage: Bool = false) {
-        self.init(media: MemoryMedia(screenOf: moment), root: root, maxPixels: maxPixels, keepsPreviousImage: keepsPreviousImage)
+    init(screenOf moment: Moment, root: URL, cipher: VaultCipher, maxPixels: Int, keepsPreviousImage: Bool = false) {
+        self.init(media: MemoryMedia(screenOf: moment), root: root, cipher: cipher, maxPixels: maxPixels, keepsPreviousImage: keepsPreviousImage)
     }
-    init(media: MemoryMedia?, root: URL, maxPixels: Int, keepsPreviousImage: Bool) {
+    init(media: MemoryMedia?, root: URL, cipher: VaultCipher, maxPixels: Int, keepsPreviousImage: Bool) {
         self.media = media; self.root = root; self.maxPixels = maxPixels; self.keepsPreviousImage = keepsPreviousImage
+        _loader = StateObject(wrappedValue: MemoryImageLoader(cipher: cipher))
     }
 
     private var key: String { "\(root.path):\(media?.key ?? ""):\(maxPixels)" }
@@ -111,8 +113,8 @@ final class MemoryImageLoader: ObservableObject {
 
     init(load: @escaping (URL, Int) async -> NSImage?) { self.load = load }
 
-    convenience init() {
-        self.init { url, size in await ImageCache.shared.image(url: url, maxPixels: size) }
+    convenience init(cipher: VaultCipher) {
+        self.init { url, size in await ImageCache.shared.image(url: url, cipher: cipher, maxPixels: size) }
     }
 
     func request(key: String, url: URL, maxPixels: Int, keepsPreviousImage: Bool) {

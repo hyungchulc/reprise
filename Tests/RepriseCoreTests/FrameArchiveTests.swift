@@ -10,7 +10,7 @@ final class FrameArchiveTests: XCTestCase {
     func testArchivedScreensStayViewableSearchableAndDeletable() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-archive-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         let captures = root.appendingPathComponent("captures")
         try FileManager.default.createDirectory(at: captures, withIntermediateDirectories: true)
         let old = Date().addingTimeInterval(-7_200)
@@ -21,6 +21,8 @@ final class FrameArchiveTests: XCTestCase {
                                           text: "archived screen \(index)", imagePath: "captures/s\(index).heic",
                                           thumbnailPath: "captures/s\(index)-thumb.heic", byteCount: 10_000))
         }
+        // New captures are sealed; stills from before encryption are not yet.
+        XCTAssertTrue(try testKeys.cipher.sealFile(at: captures.appendingPathComponent("s1.heic")))
         let archiver = FrameArchiver(store: store, root: root)
         let report: FrameArchiver.Report
         do { report = try await archiver.archiveDue(quality: FrameArchive.balancedQuality, minimumBatch: 1) }
@@ -38,6 +40,7 @@ final class FrameArchiveTests: XCTestCase {
         }
         let archivedOne = try await store.moment(id: "s1")
         let movie = try XCTUnwrap(archivedOne?.archivedFrame?.path)
+        XCTAssertTrue(VaultCipher.isSealed(fileAt: root.appendingPathComponent(movie)), "Archive movies are sealed as they are written")
         try await assertFrame(of: "s1", in: store, matches: colors[1])
         let found = try await store.search(MomentQuery(text: "archived screen"))
         XCTAssertEqual(Set(found.map(\.id)), ["s0", "s1", "s2"])
@@ -69,7 +72,7 @@ final class FrameArchiveTests: XCTestCase {
         let moment = try await store.moment(id: id)
         let frame = try XCTUnwrap(moment?.archivedFrame, file: file, line: line)
         let movie = try await store.mediaURL(frame.path)
-        let image = try await FrameReader(movie: movie).image(at: frame.offset)
+        let image = try await FrameReader(movie: movie, cipher: testKeys.cipher).image(at: frame.offset)
         let space = CGColorSpace(name: CGColorSpace.sRGB)!
         var pixel = [UInt8](repeating: 0, count: 4)
         let context = CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: space,
@@ -101,7 +104,7 @@ final class FrameArchiveSampleTests: XCTestCase {
         }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-sample-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         let captures = root.appendingPathComponent("captures")
         try FileManager.default.createDirectory(at: captures, withIntermediateDirectories: true)
         let files = try FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: source), includingPropertiesForKeys: [.contentModificationDateKey])
@@ -124,7 +127,7 @@ final class FrameArchiveSampleTests: XCTestCase {
         var decodes: [Double] = []
         for id in ["f0", "f37", "f74", "f111", "f149"] {
             guard let frame = report.frames[id] else { continue }
-            let reader = FrameReader(movie: root.appendingPathComponent(frame.videoPath))
+            let reader = FrameReader(movie: root.appendingPathComponent(frame.videoPath), cipher: testKeys.cipher)
             let begin = Date()
             _ = try await reader.image(at: frame.offset)
             decodes.append(Date().timeIntervalSince(begin) * 1000)
@@ -146,19 +149,23 @@ final class LibraryMigrationSampleTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.copyItem(at: URL(fileURLWithPath: copy), to: root.appendingPathComponent("library.sqlite"))
-        let store = try MomentStore(root: root)
+        let started = Date()
+        let store = try MomentStore(root: root, keys: testKeys)
+        let converting = Date().timeIntervalSince(started)
+        XCTAssertTrue(store.convertedFromPlaintext)
+        XCTAssertFalse(MomentStore.isPlaintextDatabase(root.appendingPathComponent("library.sqlite").path))
         let stats = try await store.stats()
         let due = try await store.archivableFrames(before: Date().addingTimeInterval(-FrameArchiver.delay), limit: 5_000)
         let latest = try await store.query(MomentQuery(limit: 1))
         let word = latest.first?.text.split(whereSeparator: { !$0.isLetter }).first(where: { $0.count > 3 }).map(String.init) ?? "the"
         let found = try await store.search(MomentQuery(text: word, limit: 5))
-        print("MIGRATE memories \(stats.momentCount), archivable \(due.count), search '\(word)' \(found.count)")
+        print("MIGRATE memories \(stats.momentCount), archivable \(due.count), search '\(word)' \(found.count), encrypted in \(String(format: "%.2f", converting)) s")
         XCTAssertGreaterThan(stats.momentCount, 0)
         XCTAssertFalse(found.isEmpty)
         var mode = stat()
         XCTAssertEqual(lstat(root.path, &mode), 0)
         XCTAssertEqual(mode.st_mode & 0o777, 0o700)
-        let reopened = try MomentStore(root: root)
+        let reopened = try MomentStore(root: root, keys: testKeys)
         let again = try await reopened.stats()
         XCTAssertEqual(again.momentCount, stats.momentCount)
     }

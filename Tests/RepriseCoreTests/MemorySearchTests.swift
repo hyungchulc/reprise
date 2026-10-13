@@ -5,7 +5,7 @@ final class MemorySearchTests: XCTestCase {
     func testWholeDayOverviewPreservesMorningAcrossLongRecentText() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-overview-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         let origin = Date(timeIntervalSince1970: 1_700_000_000)
         for index in 0..<120 {
             try await store.insert(Moment(id: "activity-\(index)", timestamp: origin.addingTimeInterval(Double(index * 900)),
@@ -37,7 +37,7 @@ final class MemorySearchTests: XCTestCase {
     func testFollowUpRehydratesOriginalEvidenceWithinCurrentFilters() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-followup-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         let memory = Moment(id: "original", timestamp: Date(timeIntervalSince1970: 200), appName: "Fixture", text: "original details", kind: "meeting")
         try await store.insert(memory)
         for index in 0..<30 { try await store.insert(Moment(id: "other-\(index)", appName: "Other", text: "next topic")) }
@@ -89,7 +89,7 @@ final class MemorySearchTests: XCTestCase {
         guard let name = ProcessInfo.processInfo.environment["REPRISE_VERIFY_PROVIDER"], let kind = AIProviderKind(rawValue: name) else { throw XCTSkip("Explicit opt-in only") }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-live-check-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         try await store.insert(Moment(id: "synthetic-evidence", appName: "Synthetic Verification", windowTitle: "Test record", text: "In this synthetic test record, the validation code for Project Marigold is 714. This is not a real personal memory."))
         let result = try await MemorySearch(store: store, client: AIClient()).search(question: "What was the validation code for Project Marigold?", configuration: AIProviderConfiguration(provider: kind))
         XCTAssertTrue(result.response.text.contains("714"))
@@ -115,7 +115,7 @@ final class MemorySearchTests: XCTestCase {
     func testVisibleFiltersRemainHardConstraintsIncludingFallback() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-filter-test-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         for (id, app, kind, time) in [("match", "Fixture", "meeting", 200.0), ("outside", "Fixture", "meeting", 100.0),
                                       ("app", "Other", "meeting", 200.0), ("kind", "Fixture", "screen", 200.0)] {
             try await store.insert(Moment(id: id, timestamp: Date(timeIntervalSince1970: time), appName: app, text: "forecast", kind: kind))
@@ -142,7 +142,7 @@ final class MemorySearchTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-search-test-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MomentStore(root: root)
+        let store = try MomentStore(root: root, keys: testKeys)
         let old = Moment(id: "old", timestamp: Date(timeIntervalSince1970: 100), appName: "Fixture", text: "quarterly forecast")
         try await store.insert(old)
         for i in 0..<40 {

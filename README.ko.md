@@ -112,9 +112,12 @@ Apple Intelligence, Private Cloud Compute, 직접 API 키 연결은 이 알파�
 ## 로컬 데이터와 자원 사용
 
 기본 저장소는 `~/Library/Application Support/Reprise`입니다. 앱 버전과 무관하게 유지되며
-SQLite, 이미지, 오디오, 전사, 검색 기록과 사용량을 담습니다.
-폴더는 현재 macOS 계정만 열 수 있지만 **저장소 자체를 앱에서 암호화하지는 않습니다.**
-같은 계정으로 실행되는 다른 앱은 읽을 수 있습니다. Mac과 백업을 보호하세요.
+데이터베이스, 이미지, 오디오, 전사, 검색 기록과 사용량을 담습니다.
+0.6부터 저장소는 **암호화됩니다.** 데이터베이스는 SQLCipher로, 스크린샷·압축 영상·녹음은
+파일마다 AES-256-GCM으로 암호화합니다. 키는 로그인 키체인에 있으며, Reprise와 MCP 헬퍼만
+묻지 않고 읽을 수 있습니다. 다른 앱이 “Reprise Vault Key”를 요청하는 창이 뜨면, 직접 시작한
+요청이 아니라면 거부하세요. 로그인 키체인을 잃으면 저장소도 열 수 없으니 키체인이 백업에
+포함되게 하세요. [암호화 범위](docs/PRIVACY.md#encryption).
 배포 파일에는 실제 기록이나 인증 정보가 포함되지 않습니다.
 
 캡처 기본값은 Native Retina 해상도, 이미지 품질 85%, 간격 3초입니다.
@@ -169,7 +172,7 @@ Ad-hoc 빌드는 다시 빌드할 때 캡처 권한이 유지되지 않을 수 �
 
 ## 개발과 문제 보고
 
-SwiftUI/AppKit, ScreenCaptureKit, Vision, Speech, AVFoundation, SQLite FTS5,
+SwiftUI/AppKit, ScreenCaptureKit, Vision, Speech, AVFoundation, SQLCipher(SQLite FTS5),
 공식 MCP Swift SDK와 Sparkle을 사용합니다. LLM이나 벡터 데이터베이스, 상시 추론 서비스는
 포함하지 않습니다. [아키텍처](docs/ARCHITECTURE.md).
 

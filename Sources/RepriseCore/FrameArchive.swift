@@ -2,10 +2,13 @@ import AVFoundation
 import CoreGraphics
 import Foundation
 import ImageIO
+import UniformTypeIdentifiers
 
 /// Older screen memories keep their text and thumbnail rows, while full-size pixels move into
 /// HEVC movies: one still per frame, frame i presented at i seconds. Screen content barely
 /// changes between captures, so a movie needs roughly a sixth of the space of HEIC stills.
+/// Movies are fragmented MPEG-4 encoded in memory and sealed as they are written, so no
+/// plaintext copy of the screens ever reaches the disk.
 public enum FrameArchive {
     public static let balancedQuality = 0.65
     static let keyFrameInterval = 30
@@ -25,8 +28,8 @@ public enum FrameArchive {
     }
 
     /// Pixel size from the image header, without decoding pixels.
-    public static func pixelSize(of image: URL) -> CGSize? {
-        guard let source = CGImageSourceCreateWithURL(image as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+    public static func pixelSize(of image: Data) -> CGSize? {
+        guard let source = CGImageSourceCreateWithData(image as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int,
               width >= 2, height >= 2 else { return nil }
@@ -35,14 +38,14 @@ public enum FrameArchive {
 
     /// Encodes stills of one pixel size in order. Returns the indices of the stills that became
     /// frames 0, 1, 2...; unreadable stills are skipped and stay where they are.
-    public static func write(_ stills: [URL], size: CGSize, to destination: URL, quality: Double) async throws -> [Int] {
+    public static func write(_ stills: [URL], size: CGSize, to destination: URL, cipher: VaultCipher, quality: Double) async throws -> [Int] {
         let width = Int(size.width) & ~1, height = Int(size.height) & ~1
-        let session = try Session(destination: destination, width: width, height: height, quality: quality)
+        let session = try Session(destination: destination, cipher: cipher, width: width, height: height, quality: quality)
         var written: [Int] = []
         do {
             for (index, still) in stills.enumerated() {
                 try Task.checkCancellation()
-                guard let buffer = autoreleasepool(invoking: { session.pixelBuffer(drawing: still) }) else { continue }
+                guard let buffer = autoreleasepool(invoking: { (try? cipher.contents(of: still)).flatMap { session.pixelBuffer(drawing: $0) } }) else { continue }
                 try await session.append(buffer, frame: written.count)
                 written.append(index)
             }
@@ -57,8 +60,9 @@ public enum FrameArchive {
 
     /// Re-encodes a movie without the frames of deleted memories. Returns the kept frame times
     /// in their new order, so kept[i] is now frame i.
-    public static func rewrite(_ movie: URL, keeping times: [Double], to destination: URL, quality: Double) async throws -> [Double] {
-        let asset = AVURLAsset(url: movie)
+    public static func rewrite(_ movie: URL, keeping times: [Double], to destination: URL, cipher: VaultCipher, quality: Double) async throws -> [Double] {
+        let source = try VaultAsset(url: movie, cipher: cipher)
+        let asset = source.asset
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw Failure.frameUnavailable }
         let size = try await track.load(.naturalSize)
         let reader = try AVAssetReader(asset: asset)
@@ -67,7 +71,7 @@ public enum FrameArchive {
         guard reader.canAdd(output) else { throw Failure.frameUnavailable }
         reader.add(output)
         guard reader.startReading() else { throw reader.error ?? Failure.frameUnavailable }
-        let session = try Session(destination: destination, width: Int(size.width) & ~1, height: Int(size.height) & ~1, quality: quality)
+        let session = try Session(destination: destination, cipher: cipher, width: Int(size.width) & ~1, height: Int(size.height) & ~1, quality: quality)
         let wanted = Set(times.map { Int($0.rounded()) })
         var kept: [Double] = []
         do {
@@ -81,6 +85,7 @@ public enum FrameArchive {
             guard reader.status == .completed else { throw reader.error ?? Failure.frameUnavailable }
             guard !kept.isEmpty else { throw Failure.writeFailed("No frames remain.") }
             try await session.finish()
+            withExtendedLifetime(source) {}
             return kept
         } catch {
             reader.cancelReading()
@@ -107,15 +112,17 @@ public enum FrameArchive {
         return String(format: "\(directory)/%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 
-    /// One HEVC movie being written; keyframes every 30 frames bound the decode for any frame.
+    /// One HEVC movie being written; keyframes every 30 frames bound the decode for any frame,
+    /// and each 30-frame fragment is sealed into the destination as the encoder hands it over.
     private final class Session {
         let writer: AVAssetWriter
         let input: AVAssetWriterInput
         let adaptor: AVAssetWriterInputPixelBufferAdaptor
+        let output: SealedOutput
         let width: Int
         let height: Int
 
-        init(destination: URL, width: Int, height: Int, quality: Double) throws {
+        init(destination: URL, cipher: VaultCipher, width: Int, height: Int, quality: Double) throws {
             guard width >= 2, height >= 2 else { throw Failure.writeFailed("Invalid frame size.") }
             self.width = width; self.height = height
             var color: [String: Any] = [AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
@@ -131,21 +138,29 @@ public enum FrameArchive {
                                                   AVVideoAllowFrameReorderingKey: false,
                                                   AVVideoExpectedSourceFrameRateKey: 1]
             ]
-            writer = try AVAssetWriter(outputURL: destination, fileType: .mov)
-            guard writer.canApply(outputSettings: settings, forMediaType: .video) else { throw Failure.encoderUnavailable }
+            writer = AVAssetWriter(contentType: UTType.mpeg4Movie)
+            writer.outputFileTypeProfile = .mpeg4AppleHLS
+            writer.preferredOutputSegmentInterval = CMTime(value: CMTimeValue(keyFrameInterval), timescale: 1)
+            writer.initialSegmentStartTime = .zero
+            output = try SealedOutput(destination: destination, cipher: cipher)
+            writer.delegate = output
+            guard writer.canApply(outputSettings: settings, forMediaType: .video) else { output.cancel(); throw Failure.encoderUnavailable }
             input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
             input.expectsMediaDataInRealTime = false
             adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
                 kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height])
-            guard writer.canAdd(input) else { throw Failure.encoderUnavailable }
+            guard writer.canAdd(input) else { output.cancel(); throw Failure.encoderUnavailable }
             writer.add(input)
-            guard writer.startWriting() else { throw Failure.writeFailed(writer.error?.localizedDescription ?? "Writer did not start.") }
+            guard writer.startWriting() else {
+                output.cancel()
+                throw Failure.writeFailed(writer.error?.localizedDescription ?? "Writer did not start.")
+            }
             writer.startSession(atSourceTime: .zero)
         }
 
-        func pixelBuffer(drawing still: URL) -> CVPixelBuffer? {
-            guard let source = CGImageSourceCreateWithURL(still as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+        func pixelBuffer(drawing still: Data) -> CVPixelBuffer? {
+            guard let source = CGImageSourceCreateWithData(still as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
                   let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary),
                   image.width & ~1 == width, image.height & ~1 == height else { return nil }
             var created: CVPixelBuffer?
@@ -176,24 +191,61 @@ public enum FrameArchive {
             input.markAsFinished()
             await writer.finishWriting()
             guard writer.status == .completed else { throw Failure.writeFailed(writer.error?.localizedDescription ?? "Movie did not finish.") }
+            try output.finish()
         }
 
-        func cancel() { if writer.status == .writing { writer.cancelWriting() } }
+        func cancel() {
+            if writer.status == .writing { writer.cancelWriting() }
+            output.cancel()
+        }
+    }
+
+    /// Receives the encoder's fragments on its own queue and seals them in order.
+    private final class SealedOutput: NSObject, AVAssetWriterDelegate, @unchecked Sendable {
+        private let writer: VaultCipher.Writer
+        private let lock = NSLock()
+        private var failure: Error?
+
+        init(destination: URL, cipher: VaultCipher) throws {
+            writer = try VaultCipher.Writer(creating: destination, cipher: cipher)
+        }
+
+        func assetWriter(_ assetWriter: AVAssetWriter, didOutputSegmentData segmentData: Data, segmentType: AVAssetSegmentType, segmentReport: AVAssetSegmentReport?) {
+            lock.lock(); defer { lock.unlock() }
+            guard failure == nil else { return }
+            do { try writer.append(segmentData) } catch { failure = error }
+        }
+
+        func finish() throws {
+            lock.lock(); defer { lock.unlock() }
+            if let failure { writer.cancel(); throw Failure.writeFailed(failure.localizedDescription) }
+            try writer.finish()
+        }
+
+        func cancel() {
+            lock.lock(); defer { lock.unlock() }
+            writer.cancel()
+        }
     }
 }
 
 /// Exact-frame decoder for one archive movie. AVAssetImageGenerator decodes from the previous keyframe.
 public final class FrameReader: @unchecked Sendable {
-    private let generator: AVAssetImageGenerator
+    private let source: Result<(VaultAsset, AVAssetImageGenerator), Error>
 
-    public init(movie: URL, maxPixels: Int = 0) {
-        generator = AVAssetImageGenerator(asset: AVURLAsset(url: movie))
-        generator.requestedTimeToleranceBefore = .zero
-        generator.requestedTimeToleranceAfter = .zero
-        if maxPixels > 0 { generator.maximumSize = CGSize(width: maxPixels, height: maxPixels) }
+    public init(movie: URL, cipher: VaultCipher, maxPixels: Int = 0) {
+        source = Result {
+            let media = try VaultAsset(url: movie, cipher: cipher)
+            let generator = AVAssetImageGenerator(asset: media.asset)
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = .zero
+            if maxPixels > 0 { generator.maximumSize = CGSize(width: maxPixels, height: maxPixels) }
+            return (media, generator)
+        }
     }
 
     public func image(at offset: Double) async throws -> CGImage {
+        let (_, generator) = try source.get()
         let (image, actual) = try await generator.image(at: CMTime(seconds: offset, preferredTimescale: 600))
         guard abs(actual.seconds - offset) < 0.5 else { throw FrameArchive.Failure.frameUnavailable }
         return image
@@ -224,6 +276,7 @@ public actor FrameArchiver {
 
     private let store: MomentStore
     private let root: URL
+    private var cipher: VaultCipher { store.cipher }
 
     public init(store: MomentStore, root: URL) {
         self.store = store
@@ -237,7 +290,7 @@ public actor FrameArchiver {
         var groups: [(size: CGSize, items: [(moment: Moment, url: URL, bytes: Int64)])] = []
         for moment in due.prefix(Self.batchFrames) {
             let url = root.appendingPathComponent(moment.imagePath)
-            guard let size = FrameArchive.pixelSize(of: url), let bytes = Self.fileSize(url) else { continue }
+            guard let bytes = Self.fileSize(url), let size = autoreleasepool(invoking: { (try? cipher.contents(of: url)).flatMap(FrameArchive.pixelSize(of:)) }) else { continue }
             if groups.last?.size != size { groups.append((size, [])) }
             groups[groups.count - 1].items.append((moment, url, bytes))
         }
@@ -247,12 +300,12 @@ public actor FrameArchiver {
               readable >= minimumBatch || now.timeIntervalSince(oldest) > delay + 3_600 else { report.backlog = false; return report }
         for group in groups {
             try Task.checkCancellation()
-            let relative = FrameArchive.movieFolder(for: group.items[0].moment.timestamp) + "/\(UUID().uuidString).mov"
+            let relative = FrameArchive.movieFolder(for: group.items[0].moment.timestamp) + "/\(UUID().uuidString).mp4"
             let destination = root.appendingPathComponent(relative)
             let written: [Int]
             do {
                 written = try await writeMovie(to: destination) { partial in
-                    try await FrameArchive.write(group.items.map(\.url), size: group.size, to: partial, quality: quality)
+                    try await FrameArchive.write(group.items.map(\.url), size: group.size, to: partial, cipher: cipher, quality: quality)
                 }
             } catch is CancellationError {
                 throw CancellationError()
@@ -287,10 +340,10 @@ public actor FrameArchiver {
                 try await store.replaceArchive(movie, with: nil, moves: [])
                 continue
             }
-            let relative = FrameArchive.movieFolder(for: frames[0].timestamp) + "/\(UUID().uuidString).mov"
+            let relative = FrameArchive.movieFolder(for: frames[0].timestamp) + "/\(UUID().uuidString).mp4"
             let destination = root.appendingPathComponent(relative)
             let kept = try await writeMovie(to: destination) { partial in
-                try await FrameArchive.rewrite(source, keeping: frames.compactMap(\.videoOffset), to: partial, quality: quality)
+                try await FrameArchive.rewrite(source, keeping: frames.compactMap(\.videoOffset), to: partial, cipher: cipher, quality: quality)
             }
             let share = (Self.fileSize(destination) ?? 0) / Int64(max(1, kept.count))
             let position = Dictionary(kept.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
@@ -309,10 +362,10 @@ public actor FrameArchiver {
     private func writeMovie<T: Collection>(to destination: URL, _ encode: (URL) async throws -> T) async throws -> T {
         let folder = destination.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let partial = folder.appendingPathComponent(".partial-\(UUID().uuidString).mov")
+        let partial = folder.appendingPathComponent(".partial-\(UUID().uuidString).mp4")
         defer { try? FileManager.default.removeItem(at: partial) }
         let frames = try await encode(partial)
-        _ = try await FrameReader(movie: partial).image(at: Double(frames.count - 1))
+        _ = try await FrameReader(movie: partial, cipher: cipher).image(at: Double(frames.count - 1))
         try FileManager.default.moveItem(at: partial, to: destination)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
         return frames

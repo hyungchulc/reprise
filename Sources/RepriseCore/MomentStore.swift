@@ -1,5 +1,5 @@
 import Foundation
-import CSQLite
+import SQLCipher
 import Darwin
 
 public enum MomentStoreError: Error, LocalizedError {
@@ -14,6 +14,10 @@ public enum MomentStoreError: Error, LocalizedError {
 }
 
 public actor MomentStore {
+    /// Seals and opens this library's media files.
+    public nonisolated let cipher: VaultCipher
+    /// This launch converted a library from before encryption.
+    public nonisolated let convertedFromPlaintext: Bool
     private let root: URL
     private let databaseURL: URL
     private let database: OpaquePointer
@@ -35,7 +39,9 @@ public actor MomentStore {
         END
         """
 
-    public init(root: URL, readOnly: Bool = false) throws {
+    /// Opens the encrypted library at `root`. A library from before encryption is converted first;
+    /// read-only callers such as MCP wait until Reprise has done that.
+    public init(root: URL, readOnly: Bool = false, keys: VaultKeys) throws {
         let requestedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
         if !readOnly {
             try FileManager.default.createDirectory(at: requestedRoot, withIntermediateDirectories: true)
@@ -61,6 +67,13 @@ public actor MomentStore {
                 throw MomentStoreError.invalidMediaPath(databaseURL.path + suffix)
             }
         }
+        let converting = Self.isPlaintextDatabase(sqlitePath)
+        if converting {
+            do {
+                guard !readOnly else { throw MomentStoreError.database("Open Reprise once to finish encrypting this library, then reconnect") }
+                try Self.encryptLegacyDatabase(at: sqlitePath, keys: keys)
+            } catch { Darwin.close(descriptor); throw error }
+        }
         var connection: OpaquePointer?
         let flags = readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
         let result = sqlite3_open_v2(sqlitePath, &connection, flags | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_NOFOLLOW, nil)
@@ -72,6 +85,7 @@ public actor MomentStore {
         }
         sqlite3_busy_timeout(connection, 5_000)
         do {
+            try Self.unlock(connection, keys: keys)
             if readOnly {
                 try Self.execute(connection, "PRAGMA query_only=ON")
                 var schema: OpaquePointer?
@@ -156,6 +170,118 @@ public actor MomentStore {
         self.databaseURL = databaseURL
         self.database = connection
         self.rootDescriptor = descriptor
+        self.cipher = keys.cipher
+        self.convertedFromPlaintext = converting
+    }
+
+    /// Whether `root` holds a library that only its key can open.
+    public static func isEncryptedLibrary(root: URL) -> Bool {
+        let path = root.appendingPathComponent("library.sqlite").path
+        guard let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.intValue, size > 0 else { return false }
+        return !isPlaintextDatabase(path)
+    }
+
+    /// SQLite's plaintext header; an SQLCipher file starts with random bytes instead.
+    static func isPlaintextDatabase(_ path: String) -> Bool {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return false }
+        defer { try? handle.close() }
+        return (try? handle.read(upToCount: 16)) == Data("SQLite format 3\0".utf8)
+    }
+
+    /// The key must be set before anything reads the file; a wrong key fails on the first read.
+    private static func unlock(_ connection: OpaquePointer, keys: VaultKeys) throws {
+        try execute(connection, "PRAGMA key = \"\(keys.databaseKey)\"")
+        guard sqlite3_exec(connection, "SELECT count(*) FROM sqlite_master", nil, nil, nil) == SQLITE_OK else {
+            throw MomentStoreError.database("This library cannot be unlocked with the key in the login keychain")
+        }
+    }
+
+    /// Copies a library from before encryption into an encrypted file, proves the copy holds the
+    /// same rows and a sound full-text index, then swaps it into place. Until the swap the
+    /// original stays untouched, so an interruption leaves a library that converts on next launch.
+    private static func encryptLegacyDatabase(at path: String, keys: VaultKeys) throws {
+        let encrypted = path + ".encrypting"
+        for leftover in [encrypted, encrypted + "-journal", encrypted + "-wal", encrypted + "-shm"] { unlink(leftover) }
+        var plain: OpaquePointer?
+        // CREATE lets ATTACH make the encrypted file; the original already exists.
+        guard sqlite3_open_v2(path, &plain, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_NOFOLLOW, nil) == SQLITE_OK, let plain else {
+            if let plain { sqlite3_close(plain) }
+            throw MomentStoreError.database("Cannot open the library to encrypt it")
+        }
+        let expected: [String: Int64]
+        do {
+            sqlite3_busy_timeout(plain, 5_000)
+            // Fold the write-ahead log into the main file so nothing is left pending beside it.
+            try execute(plain, "PRAGMA wal_checkpoint(TRUNCATE)")
+            expected = try rowCounts(plain)
+            var attach: OpaquePointer?
+            defer { sqlite3_finalize(attach) }
+            guard sqlite3_prepare_v2(plain, "ATTACH DATABASE ?1 AS encrypted KEY ?2", -1, &attach, nil) == SQLITE_OK else {
+                throw MomentStoreError.database(String(cString: sqlite3_errmsg(plain)))
+            }
+            sqlite3_bind_text(attach, 1, encrypted, -1, transient)
+            sqlite3_bind_text(attach, 2, keys.databaseKey, -1, transient)
+            guard sqlite3_step(attach) == SQLITE_DONE else { throw MomentStoreError.database(String(cString: sqlite3_errmsg(plain))) }
+            try execute(plain, "SELECT sqlcipher_export('encrypted'); DETACH DATABASE encrypted;")
+        } catch {
+            sqlite3_close(plain)
+            unlink(encrypted)
+            throw error
+        }
+        sqlite3_close(plain)
+        do {
+            var copy: OpaquePointer?
+            guard sqlite3_open_v2(encrypted, &copy, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_NOFOLLOW, nil) == SQLITE_OK, let copy else {
+                if let copy { sqlite3_close(copy) }
+                throw MomentStoreError.database("Cannot open the encrypted copy of the library")
+            }
+            defer { sqlite3_close(copy) }
+            try unlock(copy, keys: keys)
+            guard try rowCounts(copy) == expected, try scalar(copy, "PRAGMA quick_check") == "ok" else {
+                throw MomentStoreError.database("The encrypted copy of the library did not match the original")
+            }
+            // A full-text index that had drifted from its rows is rebuilt rather than carried over.
+            if expected["moments_fts_data"] != nil, (try? execute(copy, "INSERT INTO moments_fts(moments_fts) VALUES('integrity-check')")) == nil {
+                try execute(copy, "INSERT INTO moments_fts(moments_fts) VALUES('rebuild')")
+            }
+            try execute(copy, "PRAGMA journal_mode=WAL")
+        } catch {
+            unlink(encrypted)
+            throw error
+        }
+        _ = lchmod(encrypted, 0o600)
+        guard rename(encrypted, path) == 0 else {
+            let failure = String(cString: strerror(errno))
+            unlink(encrypted)
+            throw MomentStoreError.database("Cannot replace the library with its encrypted copy: \(failure)")
+        }
+        // Any log beside the old file was emptied above and belongs to the plaintext database.
+        for suffix in ["-wal", "-shm"] { unlink(path + suffix) }
+    }
+
+    private static func rowCounts(_ connection: OpaquePointer) throws -> [String: Int64] {
+        var tables: OpaquePointer?
+        defer { sqlite3_finalize(tables) }
+        guard sqlite3_prepare_v2(connection, "SELECT name FROM sqlite_master WHERE type='table' AND rootpage>0 AND name NOT LIKE 'sqlite_%'", -1, &tables, nil) == SQLITE_OK else {
+            throw MomentStoreError.database(String(cString: sqlite3_errmsg(connection)))
+        }
+        var counts: [String: Int64] = [:]
+        while sqlite3_step(tables) == SQLITE_ROW {
+            guard let name = sqlite3_column_text(tables, 0).map({ String(cString: $0) }) else { continue }
+            let quoted = "\"" + name.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+            counts[name] = Int64(try scalar(connection, "SELECT count(*) FROM \(quoted)") ?? "") ?? -1
+        }
+        return counts
+    }
+
+    private static func scalar(_ connection: OpaquePointer, _ sql: String) throws -> String? {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(connection, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw MomentStoreError.database(String(cString: sqlite3_errmsg(connection)))
+        }
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return sqlite3_column_text(statement, 0).map { String(cString: $0) }
     }
 
     deinit {
@@ -543,6 +669,12 @@ public actor MomentStore {
         return reclaimed
     }
 
+    /// Every media path a memory points at.
+    public func referencedMedia() throws -> Set<String> {
+        Set(try selectedIDs("SELECT image_path FROM moments UNION SELECT thumbnail_path FROM moments UNION SELECT video_path FROM moments WHERE video_path IS NOT NULL", []))
+            .subtracting([""])
+    }
+
     private func isReferenced(_ path: String) throws -> Bool {
         let statement = try prepare("SELECT 1 FROM moments WHERE image_path=? OR thumbnail_path=? OR video_path=? LIMIT 1")
         defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }
@@ -856,7 +988,7 @@ public actor MomentStore {
               info.st_size > 0, info.st_size <= maxBytes else { throw MomentStoreError.invalidMediaPath(path) }
         let data = try handle.read(upToCount: maxBytes + 1) ?? Data()
         guard !data.isEmpty, data.count <= maxBytes else { throw MomentStoreError.invalidMediaPath(path) }
-        return data
+        return VaultCipher.isSealed(data) ? try cipher.open(data) : data
     }
 
     private func removeMedia(_ path: String) {

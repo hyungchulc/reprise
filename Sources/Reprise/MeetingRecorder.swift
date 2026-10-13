@@ -14,6 +14,7 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
     @Published private(set) var systemAudioAvailable = false
     @Published private(set) var isBusy = false
     @Published private(set) var transcribingMomentID: String?
+    private var transcribingPath: String?
     @Published private(set) var lastSavedMoment: Moment?
 
     private let store: MomentStore
@@ -220,6 +221,7 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
                         url = mixedURL
                     } catch {
                         // Keep both sources for recovery if the combined export fails.
+                        _ = try? store.cipher.sealFile(at: systemAudio)
                         appendWarning("Saved microphone only. Mixing failed: \(error.localizedDescription). System audio retained at \(systemAudio.lastPathComponent).")
                     }
                 } else if let systemFile {
@@ -227,14 +229,17 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
                     appendWarning("Saved microphone only.")
                 }
             }
-            let bytes = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
-            guard bytes > 0 else { throw CaptureFailure("The microphone recording is empty.") }
+            let recorded = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+            guard recorded > 0 else { throw CaptureFailure("The microphone recording is empty.") }
             let savedAsset = AVURLAsset(url: url)
             let savedDuration = try await savedAsset.load(.duration).seconds
             guard savedDuration.isFinite, savedDuration > 0,
                   !(try await savedAsset.loadTracks(withMediaType: .audio)).isEmpty else {
                 throw CaptureFailure("The meeting audio is not playable.")
             }
+            // Sealed before it is indexed; transcription reads the sealed file.
+            try store.cipher.sealFile(at: url)
+            let bytes = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? recorded
             // Index the complete audio before transcription, so interruption cannot hide it.
             let moment = Moment(timestamp: timestamp, appName: "Meeting", windowTitle: title,
                                 videoPath: savedPath, kind: "meeting", byteCount: bytes, audioDuration: savedDuration,
@@ -244,10 +249,19 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
             if transcriptionEnabled { await transcribeStoredAudio(moment, url: url, locales: transcriptionLocales) }
             status = lastError != nil ? "Meeting saved with warnings" : (transcript.isEmpty ? "Meeting saved, no transcript available" : "Meeting saved")
         } catch {
-            // Keep the original audio recoverable when indexing fails.
+            // Keep the original audio recoverable when indexing fails, sealed like the rest.
+            _ = try? store.cipher.sealFile(at: url)
             appendWarning("\(error.localizedDescription) Audio retained at \(savedPath).")
             status = "Meeting could not be indexed"
         }
+    }
+
+    /// Library files a recording or transcription in progress is still using.
+    var mediaInUse: Set<String> {
+        var paths = Set([transcribingPath].compactMap { $0 })
+        if let relativePath { paths.formUnion([relativePath, relativePath.replacingOccurrences(of: ".mic.m4a", with: ".m4a")]) }
+        if let systemURL { paths.insert("meetings/" + systemURL.lastPathComponent) }
+        return paths
     }
 
     func transcribeSaved(_ moment: Moment, locales: [String]) async {
@@ -264,8 +278,8 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
     }
 
     private func transcribeStoredAudio(_ moment: Moment, url: URL, locales selection: [String]) async {
-        transcribingMomentID = moment.id
-        defer { transcribingMomentID = nil }
+        transcribingMomentID = moment.id; transcribingPath = moment.videoPath
+        defer { transcribingMomentID = nil; transcribingPath = nil }
         transcript = ""; transcriptSegments = []; transcriptionWarnings = []
         if transcriptionCancelled {
             appendTranscriptionWarning("Transcription was interrupted. Complete audio was kept.")
@@ -321,11 +335,14 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
         status = "Transcribing on device"
         analysisReached = [:]
         do {
-            let file = try AVAudioFile(forReading: url)
-            let duration = Double(file.length) / max(1, file.processingFormat.sampleRate)
             let transcribers = locales.map { SpeechLanguages.transcriber($0) }
+            guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: transcribers) else {
+                throw CaptureFailure("The speech models accept no audio format available on this Mac.")
+            }
+            let audio = try await RecordingAudio(url: url, cipher: store.cipher, format: format)
+            let duration = audio.duration
             let analyzer = SpeechAnalyzer(modules: transcribers)
-            analysisCancel = { await analyzer.cancelAndFinishNow() }
+            analysisCancel = { audio.cancel(); await analyzer.cancelAndFinishNow() }
             defer { analysisCancel = nil }
             let heard = try await withThrowingTaskGroup(of: (String, [RecognizedSpeech], String?).self) { group in
                 for (locale, transcriber) in zip(locales, transcribers) {
@@ -341,8 +358,10 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
                         } catch { return (id, speech, error.localizedDescription) }
                     }
                 }
-                do { try await analyzer.start(inputAudioFile: file, finishAfterFile: true) }
-                catch { await analyzer.cancelAndFinishNow(); throw error }
+                do {
+                    if let end = try await analyzer.analyzeSequence(audio) { try await analyzer.finalizeAndFinish(through: end) }
+                    else { await analyzer.cancelAndFinishNow() }
+                } catch { await analyzer.cancelAndFinishNow(); throw error }
                 var heard: [(String, [RecognizedSpeech], String?)] = []
                 for try await item in group { heard.append(item) }
                 return heard
@@ -391,7 +410,14 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
         defer { try? FileManager.default.removeItem(at: directory) }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            let asset = AVURLAsset(url: url)
+            // Older systems export chunks from a file; a sealed recording is opened in this
+            // private work folder for the duration and removed with it.
+            var source = url
+            if VaultCipher.isSealed(fileAt: url) {
+                source = directory.appendingPathComponent("source.\(url.pathExtension)")
+                try store.cipher.contents(of: url).write(to: source)
+            }
+            let asset = AVURLAsset(url: source)
             let duration = try await asset.load(.duration).seconds
             guard duration.isFinite, duration > 0, duration <= 4 * 60 * 60 + 30 else {
                 throw CaptureFailure("The audio duration is invalid or exceeds the meeting limit.")
@@ -508,5 +534,53 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
             self.appendWarning(error?.localizedDescription ?? "Microphone encoding failed.")
             await self.stop()
         }
+    }
+}
+
+/// A library recording decoded for the speech analyzer straight from its sealed file, at the
+/// analyzer's pace and without a plaintext copy.
+@available(macOS 26, *)
+private final class RecordingAudio: AsyncSequence, @unchecked Sendable {
+    typealias Element = AnalyzerInput
+    let duration: Double
+    private let media: VaultAsset
+    private let reader: AVAssetReader
+    private let output: AVAssetReaderTrackOutput
+    private let format: AVAudioFormat
+
+    init(url: URL, cipher: VaultCipher, format: AVAudioFormat) async throws {
+        media = try VaultAsset(url: url, cipher: cipher)
+        guard let track = try await media.asset.loadTracks(withMediaType: .audio).first else { throw CaptureFailure("The recording has no audio track.") }
+        duration = try await media.asset.load(.duration).seconds
+        reader = try AVAssetReader(asset: media.asset)
+        output = AVAssetReaderTrackOutput(track: track, outputSettings: format.settings)
+        output.alwaysCopiesSampleData = false
+        guard reader.canAdd(output) else { throw CaptureFailure("The recording cannot be decoded for transcription.") }
+        reader.add(output)
+        guard reader.startReading() else { throw reader.error ?? CaptureFailure("The recording cannot be decoded for transcription.") }
+        self.format = format
+    }
+
+    struct AsyncIterator: AsyncIteratorProtocol {
+        let source: RecordingAudio
+        func next() async throws -> AnalyzerInput? { try source.next() }
+    }
+
+    func makeAsyncIterator() -> AsyncIterator { AsyncIterator(source: self) }
+
+    func cancel() { reader.cancelReading() }
+
+    private func next() throws -> AnalyzerInput? {
+        while let sample = output.copyNextSampleBuffer() {
+            let frames = CMSampleBufferGetNumSamples(sample)
+            guard frames > 0, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)) else { continue }
+            buffer.frameLength = AVAudioFrameCount(frames)
+            guard CMSampleBufferCopyPCMDataIntoAudioBufferList(sample, at: 0, frameCount: Int32(frames), into: buffer.mutableAudioBufferList) == noErr else {
+                throw CaptureFailure("The recording could not be decoded for transcription.")
+            }
+            return AnalyzerInput(buffer: buffer, bufferStartTime: CMSampleBufferGetPresentationTimeStamp(sample))
+        }
+        if reader.status == .failed { throw reader.error ?? CaptureFailure("The recording could not be decoded for transcription.") }
+        return nil
     }
 }

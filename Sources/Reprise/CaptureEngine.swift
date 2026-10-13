@@ -123,7 +123,7 @@ final class CaptureEngine: ObservableObject {
             guard token == generation, !Task.isCancelled, pauseReason(settings: settings) == nil,
                   foregroundContext() == before, privacyReason(before, settings: settings) == nil else { skip("Skipped changed context"); return }
             let contextKey = "\(display.displayID)|\(before.pid)|\(before.title)"
-            prepared = try await processor.prepare(image: image, root: root, settings: settings,
+            prepared = try await processor.prepare(image: image, root: root, cipher: store.cipher, settings: settings,
                 previousFingerprint: settings.deduplicate && contextKey == lastContext ? lastFingerprint : nil)
             guard let result = prepared else { skip("Recording, unchanged screen"); return }
             guard token == generation, !Task.isCancelled, pauseReason(settings: settings) == nil,

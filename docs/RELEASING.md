@@ -39,11 +39,22 @@ swift test
 node script/check_mcp.mjs dist/Reprise.app/Contents/MacOS/RepriseMCP
 ```
 
-Three opt-in checks use real data without touching the vault: `REPRISE_TEST_SPEECH=1`
-transcribes a synthetic Korean/English meeting with the Mac's speech models,
+Opt-in checks use real data without touching the vault: `REPRISE_TEST_SPEECH=1`
+transcribes a sealed synthetic Korean/English meeting with the Mac's speech models,
 `REPRISE_ARCHIVE_SAMPLE=<captures folder>` compresses copies of the newest 150
-screens, and `REPRISE_LIBRARY_COPY=<library.sqlite>` migrates a copy made with
-`sqlite3 'file:…/library.sqlite?mode=ro' ".backup copy.sqlite"`.
+screens, `REPRISE_LIBRARY_COPY=<library.sqlite>` converts a copy made with
+`sqlite3 'file:…/library.sqlite?mode=ro' ".backup copy.sqlite"` to an encrypted library,
+`REPRISE_VAULT_COPY=<folder>` encrypts a copied library folder and opens every kind of
+media, and `REPRISE_TEST_KEYCHAIN=1` writes, reads and removes a throwaway keychain item.
+They use a key that exists only in the test process, so the real-data checks need a
+library from before 0.6; an encrypted library opens only with its own keychain key.
+
+To check keychain access with the signed bundle, run
+`./dist/Reprise.app/Contents/MacOS/Reprise --check-vault <copied folder>` and then
+`./dist/Reprise.app/Contents/MacOS/RepriseMCP --vault <copied folder> --check`. A
+copy outside the usual vault gets its own keychain item (account `library:<path>`);
+remove it afterwards with `security delete-generic-password -s local.aria.reprise.vault
+-a "library:<path>"`. Never run `--check-vault` on a copy that is still in use.
 
 The package check runs before opening a vault, requesting permissions, or creating
 the app model. The stdio check uses a temporary disabled vault. Neither test records

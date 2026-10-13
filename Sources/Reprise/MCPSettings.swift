@@ -10,10 +10,12 @@ final class MCPSettingsModel: ObservableObject {
     @Published private(set) var message: String?
     let helper: URL
     private let root: URL
+    private let keys: VaultKeys
     private let installer: MCPClientInstaller
 
-    init(root: URL) {
+    init(root: URL, keys: VaultKeys) {
         self.root = root
+        self.keys = keys
         helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/RepriseMCP")
         installer = MCPClientInstaller(helper: helper, vault: root)
     }
@@ -21,7 +23,7 @@ final class MCPSettingsModel: ObservableObject {
     func refresh() async {
         guard !busy else { return }
         busy = true; defer { busy = false }
-        do { access = try MCPAccess.load(root: root) }
+        do { access = try MCPAccess.load(root: root, keys: keys) }
         catch { message = "MCP settings could not be read. Access remains disabled."; access = MCPAccess() }
         for client in MCPClientKind.allCases { clients[client] = await installer.status(client) }
     }
@@ -30,7 +32,7 @@ final class MCPSettingsModel: ObservableObject {
         var value = access
         if let enabled { value.enabled = enabled }
         if let images { value.allowImages = images }
-        do { try value.save(root: root); access = value; message = nil }
+        do { try value.save(root: root, keys: keys); access = value; message = nil }
         catch { message = "MCP settings could not be saved. No access change was applied." }
     }
 
@@ -64,7 +66,7 @@ struct MCPSettings: View {
     @StateObject private var model: MCPSettingsModel
     @State private var confirmAccess = false
     @State private var confirmImages = false
-    init(root: URL) { _model = StateObject(wrappedValue: MCPSettingsModel(root: root)) }
+    init(root: URL, keys: VaultKeys) { _model = StateObject(wrappedValue: MCPSettingsModel(root: root, keys: keys)) }
 
     var body: some View {
         Group {

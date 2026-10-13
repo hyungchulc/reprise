@@ -24,7 +24,7 @@ struct PreparedCapture: Sendable {
 
 // Serial actor bounds image encoding and Vision to the single caller-owned frame.
 actor CaptureImageProcessor {
-    func prepare(image: CGImage, root: URL, settings: CaptureSettings, previousFingerprint: String?) throws -> PreparedCapture? {
+    func prepare(image: CGImage, root: URL, cipher: VaultCipher, settings: CaptureSettings, previousFingerprint: String?) throws -> PreparedCapture? {
         try autoreleasepool {
             let timestamp = Date()
             guard let pixels = image.dataProvider?.data else { throw CaptureFailure("Unable to read captured image.") }
@@ -53,27 +53,25 @@ actor CaptureImageProcessor {
             var imagePath = "captures/\(id).heic"
             var thumbnailPath = "captures/\(id)-thumb.heic"
             do {
-                if !encode(image, to: root.appendingPathComponent(imagePath), type: .heic, quality: quality) {
-                    try? FileManager.default.removeItem(at: root.appendingPathComponent(imagePath))
+                // Pixels are encoded in memory and reach the disk only sealed.
+                var still = encode(image, type: .heic, quality: quality)
+                if still == nil {
                     imagePath = "captures/\(id).jpg"
-                    guard encode(image, to: root.appendingPathComponent(imagePath), type: .jpeg, quality: quality) else {
-                        throw CaptureFailure("Unable to encode captured image.")
-                    }
+                    still = encode(image, type: .jpeg, quality: quality)
                 }
+                guard let still else { throw CaptureFailure("Unable to encode captured image.") }
+                try cipher.write(still, to: root.appendingPathComponent(imagePath))
                 guard let thumbnail = resized(image, maxDimension: 400) else { throw CaptureFailure("Unable to encode thumbnail.") }
-                if !encode(thumbnail, to: root.appendingPathComponent(thumbnailPath), type: .heic, quality: 0.6) {
-                    try? FileManager.default.removeItem(at: root.appendingPathComponent(thumbnailPath))
+                var small = encode(thumbnail, type: .heic, quality: 0.6)
+                if small == nil {
                     thumbnailPath = "captures/\(id)-thumb.jpg"
-                    guard encode(thumbnail, to: root.appendingPathComponent(thumbnailPath), type: .jpeg, quality: 0.7) else {
-                        throw CaptureFailure("Unable to encode thumbnail.")
-                    }
+                    small = encode(thumbnail, type: .jpeg, quality: 0.7)
                 }
-                let paths = [imagePath, thumbnailPath]
+                guard let small else { throw CaptureFailure("Unable to encode thumbnail.") }
+                try cipher.write(small, to: root.appendingPathComponent(thumbnailPath))
                 var bytes: Int64 = 0
-                for path in paths {
-                    let url = root.appendingPathComponent(path)
-                    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-                    bytes += (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+                for path in [imagePath, thumbnailPath] {
+                    bytes += (try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent(path).path)[.size] as? NSNumber)?.int64Value ?? 0
                 }
                 return PreparedCapture(timestamp: timestamp, fingerprint: fingerprint, text: text, ocrWarning: ocrWarning,
                                        imagePath: imagePath, thumbnailPath: thumbnailPath, byteCount: bytes)
@@ -89,10 +87,11 @@ actor CaptureImageProcessor {
         for path in [result.imagePath, result.thumbnailPath] { try? FileManager.default.removeItem(at: root.appendingPathComponent(path)) }
     }
 
-    private func encode(_ image: CGImage, to url: URL, type: UTType, quality: Double) -> Bool {
-        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil) else { return false }
+    private func encode(_ image: CGImage, type: UTType, quality: Double) -> Data? {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data as CFMutableData, type.identifier as CFString, 1, nil) else { return nil }
         CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
-        return CGImageDestinationFinalize(destination)
+        return CGImageDestinationFinalize(destination) ? data as Data : nil
     }
 
     private func resized(_ image: CGImage, maxDimension: Int) -> CGImage? {

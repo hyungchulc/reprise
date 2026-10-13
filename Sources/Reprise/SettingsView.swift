@@ -52,7 +52,7 @@ struct SettingsView: View {
                     case .models: AISettings(model: model)
                     case .storage: storage
                     case .usage: usage
-                    case .mcp: MCPSettings(root: model.root)
+                    case .mcp: MCPSettings(root: model.root, keys: model.keys)
                     }
                 }.formStyle(.grouped).frame(maxWidth: .infinity)
             }
@@ -156,6 +156,13 @@ struct SettingsView: View {
             HStack { Text("Limit"); Slider(value: $model.settings.storageLimitGB, in: 1...100, step: 1); Text("\(Int(model.settings.storageLimitGB)) GB").monospacedDigit().frame(width: 55) }
             Button("Apply Retention Now", systemImage: "trash", role: .destructive) { confirmCleanup = true }
             Button("Open Library Folder", systemImage: "folder") { NSWorkspace.shared.open(model.root) }
+        }
+        Section("Encryption") {
+            LabeledContent("Library", value: "Encrypted, AES-256")
+            LabeledContent("Key", value: "Login keychain, “Reprise Vault Key”")
+            Text("Screen text, transcripts, screenshots and recordings are stored encrypted. Only Reprise and its MCP helper can use the key without asking. If another app asks for “Reprise Vault Key”, deny it unless you started that request.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let status = model.encryptionStatus { Text(status).font(.caption).foregroundStyle(.orange) }
         }
         Section("Compression") {
             Toggle("Compress older screens", isOn: $model.settings.archiveOlderFrames)

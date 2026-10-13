@@ -5,10 +5,9 @@ Reprise is a Swift Package Manager macOS application. It has no backend service.
 | Module | Responsibility |
 | --- | --- |
 | `Reprise` | SwiftUI/AppKit UI, overlay, capture, audio, permissions, settings and Sparkle updates |
-| `RepriseCore` | SQLite persistence, search/retrieval, model adapters, history and client configuration |
+| `RepriseCore` | Encrypted persistence (SQLCipher, sealed media), search/retrieval, model adapters, history and client configuration |
 | `RepriseMCPKit` | Read-only memory tools and MCP Swift SDK server |
 | `RepriseMCP` | Small stdio entrypoint, packaged beside the app executable |
-| `CSQLite` | System SQLite module map |
 
 ## Capture And Storage
 
@@ -21,6 +20,21 @@ verified before any still is deleted. Deleting a compressed screen queues its mo
 re-encoding without that frame. The SQLite actor owns prepared statements, WAL access,
 FTS5 and bounded caches. Media paths are vault-relative and validated before file
 operations. Database migrations are additive, and settings decode key by key.
+
+## Encryption
+
+`VaultKeys` derives the database, media and consent keys from one master key that
+`VaultKeychain` keeps in the login keychain, with Reprise and `RepriseMCP` as trusted
+applications. The database is SQLCipher (swift-sqlcipher, FTS5, in-memory temp store,
+secure delete) opened with a raw key. `VaultCipher` seals files as a 32-byte header plus
+independent 1 MiB AES-GCM chunks whose nonce carries the chunk index and a last-chunk flag;
+each file derives its own key from a random salt. Captures, thumbnails and imports are
+encoded in memory and written sealed. Archive movies are fragmented MPEG-4 produced in
+memory by `AVAssetWriter` and sealed per fragment. `VaultAsset` serves sealed movies and
+recordings to AVFoundation through a resource loader that decrypts only the requested
+ranges, so playback, frame decoding, re-encoding and transcription never write plaintext.
+A library from before encryption is converted at launch with `sqlcipher_export`, verified,
+then swapped in; `VaultMigration` seals its older media in bounded background batches.
 
 Audio combines explicit microphone input and optional system audio. Stopping saves
 the complete recording before on-device transcription. On macOS 26 and later one

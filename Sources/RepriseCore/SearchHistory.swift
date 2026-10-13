@@ -78,17 +78,17 @@ public struct SearchHistory: Codable, Equatable, Sendable {
         lhs.compare(rhs, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
     }
 
-    public static func load(root: URL) -> SearchHistory {
+    /// Saved answers quote memories, so the file is sealed like the rest of the library. A file
+    /// from before encryption is read once and sealed on the next save.
+    public static func load(root: URL, cipher: VaultCipher) -> SearchHistory {
         let url = root.appendingPathComponent("search-history.json")
         guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 4 * 1_024 * 1_024,
-              let data = try? Data(contentsOf: url),
+              let data = try? cipher.contents(of: url),
               let saved = try? JSONDecoder().decode(Self.self, from: data) else { return Self() }
         return saved
     }
 
-    public func save(root: URL) throws {
-        let url = root.appendingPathComponent("search-history.json")
-        try JSONEncoder().encode(self).write(to: url, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    public func save(root: URL, cipher: VaultCipher) throws {
+        try cipher.write(try JSONEncoder().encode(self), to: root.appendingPathComponent("search-history.json"))
     }
 }

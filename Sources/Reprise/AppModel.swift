@@ -12,6 +12,9 @@ import Vision
 final class AppModel: ObservableObject {
     let root: URL
     let store: MomentStore
+    /// This library's keys; MCP consent is signed with them.
+    let keys: VaultKeys
+    var cipher: VaultCipher { store.cipher }
     let capture: CaptureEngine
     let meeting: MeetingRecorder
     let ai = AIClient()
@@ -69,6 +72,7 @@ final class AppModel: ObservableObject {
         }
     }
     @Published private(set) var archiveStatus: String?
+    @Published private(set) var encryptionStatus: String?
     @Published var settings: CaptureSettings
     @Published var provider: AIProviderConfiguration
     @Published var timeZone = TimeZone.autoupdatingCurrent
@@ -90,13 +94,17 @@ final class AppModel: ObservableObject {
     private var archiveTask: Task<Void, Never>?
     private var archiveRequested = false
 
-    init(root: URL = ReprisePaths.root) throws {
+    init(root: URL = ReprisePaths.root, keys: VaultKeys? = nil) throws {
         self.root = root
-        store = try MomentStore(root: root)
+        let keys = try keys ?? Self.libraryKeys(root: root)
+        self.keys = keys
+        store = try MomentStore(root: root, keys: keys)
+        // MCP consent written before encryption carried no signature; keep that choice once.
+        if store.convertedFromPlaintext { try? MCPAccess.adoptUnsigned(root: root, keys: keys) }
         capture = CaptureEngine(store: store, root: root)
         meeting = MeetingRecorder(store: store, root: root, languages: speechLanguages)
         archiver = FrameArchiver(store: store, root: root)
-        searchHistory = SearchHistory.load(root: root)
+        searchHistory = SearchHistory.load(root: root, cipher: keys.cipher)
         let defaults = UserDefaults.standard
         preferences = defaults.data(forKey: "appPreferences").flatMap { try? JSONDecoder().decode(AppPreferences.self, from: $0) } ?? AppPreferences()
         settings = defaults.data(forKey: "captureSettings").flatMap { try? JSONDecoder().decode(CaptureSettings.self, from: $0) } ?? CaptureSettings()
@@ -584,7 +592,7 @@ final class AppModel: ObservableObject {
     }
 
     private func saveSearchHistory() {
-        do { try searchHistory.save(root: root) }
+        do { try searchHistory.save(root: root, cipher: cipher) }
         catch { self.error = "Could not save recent searches: \(error.localizedDescription)" }
     }
 
@@ -602,7 +610,7 @@ final class AppModel: ObservableObject {
         busy = true; defer { busy = false }
         do {
             for url in panel.urls {
-                let moment = try await ImageImporter.shared.importFile(url, root: root)
+                let moment = try await ImageImporter.shared.importFile(url, root: root, cipher: cipher)
                 try await store.insert(moment)
             }
             dayFilter = nil; search = ""; await reload()
@@ -615,6 +623,16 @@ final class AppModel: ObservableObject {
         do { try await store.export(to: url, query: query) } catch { self.error = error.localizedDescription }
     }
 
+    /// The library key from the login keychain, created on first use. A library that is already
+    /// encrypted never gets a new key: nothing sealed with the old one could be read with it.
+    nonisolated static func libraryKeys(root: URL) throws -> VaultKeys {
+        if let master = try VaultKeychain.load(root: root) { return VaultKeys(master: master) }
+        guard !MomentStore.isEncryptedLibrary(root: root) else { throw VaultKeychain.Failure.missing }
+        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/RepriseMCP")
+        let programs: [URL?] = FileManager.default.isExecutableFile(atPath: helper.path) ? [nil, helper] : [nil]
+        return VaultKeys(master: try VaultKeychain.create(root: root, trusting: programs))
+    }
+
     func shutdown() { heartbeat?.cancel(); askTask?.cancel(); scrubTask?.cancel(); archiveTask?.cancel(); meetingDetector.stop() }
 
     /// Quit and pause close the session; a power-off with recording on resumes it at the next launch.
@@ -624,7 +642,8 @@ final class AppModel: ObservableObject {
     }
 
     /// Compresses older screens every ten minutes, faster while a backlog remains, and re-encodes
-    /// movies that held deleted screens. Interrupted leftovers are swept once per launch.
+    /// movies that held deleted screens. Files from before encryption are sealed first, and
+    /// interrupted leftovers are swept once per launch.
     private func startArchiving() {
         archiveTask?.cancel()
         archiveTask = Task(priority: .utility) { [weak self] in
@@ -632,7 +651,8 @@ final class AppModel: ObservableObject {
             var swept = false
             while !Task.isCancelled {
                 guard let self else { return }
-                let backlog = await self.archiveOnce()
+                let unsealed = await self.sealLegacyMedia()
+                let backlog = await self.archiveOnce() || unsealed
                 if !swept {
                     swept = true
                     _ = try? await self.store.removeUnreferencedMedia()
@@ -645,6 +665,17 @@ final class AppModel: ObservableObject {
                 self.archiveRequested = false
             }
         }
+    }
+
+    /// Seals one batch of media written before encryption. Returns whether more remain.
+    private func sealLegacyMedia() async -> Bool {
+        guard let referenced = try? await store.referencedMedia() else { return false }
+        let root = self.root, cipher = self.cipher, inUse = meeting.mediaInUse
+        let progress = await Task.detached(priority: .utility) {
+            VaultMigration.sealLegacyFiles(root: root, cipher: cipher, referenced: referenced, inUse: inUse)
+        }.value
+        encryptionStatus = progress.failure.map { "Some files are not encrypted yet: \($0)" }
+        return progress.remaining
     }
 
     private func archiveOnce() async -> Bool {
@@ -678,17 +709,19 @@ final class AppModel: ObservableObject {
 
 actor ImageImporter {
     static let shared = ImageImporter()
-    func importFile(_ url: URL, root: URL) throws -> Moment {
+    func importFile(_ url: URL, root: URL, cipher: VaultCipher) throws -> Moment {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 2400, kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else {
             throw CocoaError(.fileReadCorruptFile)
         }
         let id = UUID().uuidString; let relative = "imports/\(id).jpg"
         let destination = root.appendingPathComponent(relative)
-        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        guard let encoder = CGImageDestinationCreateWithURL(destination as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else { throw CocoaError(.fileWriteUnknown) }
+        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let encoded = NSMutableData()
+        guard let encoder = CGImageDestinationCreateWithData(encoded as CFMutableData, UTType.jpeg.identifier as CFString, 1, nil) else { throw CocoaError(.fileWriteUnknown) }
         CGImageDestinationAddImage(encoder, image, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
         guard CGImageDestinationFinalize(encoder) else { throw CocoaError(.fileWriteUnknown) }
+        try cipher.write(encoded as Data, to: destination)
         let request = VNRecognizeTextRequest(); request.recognitionLevel = .accurate; request.recognitionLanguages = ["en-US", "ko-KR"]
         try VNImageRequestHandler(cgImage: image).perform([request])
         let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
