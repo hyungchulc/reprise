@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0-alpha.3
+
+- Maintenance release to exercise the signed Sparkle update from alpha.2.
+- No feature, settings, database schema or vault-location changes.
+
+Apple Development signing and the Sparkle public key are unchanged. This release
+is still unnotarized. A successful manual alpha.2 installation has been confirmed
+on the maintainer's Mac; the earlier interruption's cause remains unconfirmed.
+
 ## 0.4.0-alpha.2
 
 - Fix the MCP result initializer for the Swift toolchain used by GitHub Actions.

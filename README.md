@@ -41,8 +41,9 @@ not a separate installer; the ZIP contains the same app.
 
 **A failed copy or installation is a separate issue.** If the app cannot be moved
 to your chosen Applications folder, report the exact alert and step. Open Anyway
-is not a fix for a failed copy. An installation interruption has been reported and
-its cause is still under investigation; alpha.2 does not claim to resolve it.
+is not a fix for a failed copy. Manual alpha.2 installation has since succeeded on
+the maintainer's Mac, but the cause of an earlier interruption is still unconfirmed.
+This does not establish compatibility on other Macs.
 
 After copying succeeds and you attempt to open that copy, use **Open Anyway**
 only if you trust this source and macOS offers it. This is a user-granted exception,
