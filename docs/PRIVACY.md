@@ -5,12 +5,15 @@
 The vault stores screenshots, OCR text, window titles/app names, timestamps, audio,
 transcripts, search conversations and reported usage in
 `~/Library/Application Support/Reprise`, unless a custom `REPRISE_DATA_DIR` is used.
-Updating the app does not change that path. The app does **not** encrypt the vault
-itself. Other same-user processes and backup tools may be able to read it.
+Updating the app does not change that path. The folder is private to your macOS
+account, but the app does **not** encrypt the vault itself. Other same-user processes
+and backup tools may be able to read it. Screens older than 15 minutes are kept as
+frames of HEVC movies; deleting such a screen re-encodes its movie without it.
 
 Screen capture requires macOS permission and a start action, unless the user has
 enabled start-on-launch. Audio recording is separate and explicit. On-device
-transcription depends on the chosen language and OS support. Meeting detection
+transcription runs in each chosen language with Apple's speech models on this Mac;
+on macOS 26 and later those models download when a language is chosen. Meeting detection
 only offers a prompt. Reprise excludes itself from screen capture and supports
 app/title exclusions, idle/battery pauses and retention limits.
 

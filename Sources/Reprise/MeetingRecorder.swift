@@ -32,9 +32,7 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
     private var speechTask: SFSpeechRecognitionTask?
     private var speechTimeout: Task<Void, Never>?
     private struct SpeechChunk {
-        var text = ""
-        var start: Double?
-        var end: Double?
+        var pieces: [RecognizedSpeech] = []
     }
     private var speechContinuation: CheckedContinuation<SpeechChunk, Never>?
     private var speechGeneration = UUID()
@@ -43,12 +41,16 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
     private var transcriptionWarnings: [String] = []
     private var transcriptionCancelled = false
     private var transcriptionEnabled = true
-    private var transcriptionLocale = Locale.current.identifier
+    private var transcriptionLocales: [String] = []
+    private var analysisCancel: (() async -> Void)?
+    private var analysisReached: [String: Double] = [:]
     private var observers: [NSObjectProtocol] = []
+    private let languages: SpeechLanguages
 
-    init(store: MomentStore, root: URL) {
+    init(store: MomentStore, root: URL, languages: SpeechLanguages) {
         self.store = store
         self.root = root
+        self.languages = languages
         super.init()
         // A suspended machine must not silently resume its microphone session on wake.
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
@@ -70,10 +72,10 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
         for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
     }
 
-    func start(title: String = "Meeting", includeSystemAudio: Bool = true, transcribe: Bool = true, speechLocale: String = Locale.current.identifier) async {
+    func start(title: String = "Meeting", includeSystemAudio: Bool = true, transcribe: Bool = true, speechLocales: [String]) async {
         guard !isRecording, !starting, !finalizing else { return }
         transcriptionEnabled = transcribe
-        transcriptionLocale = speechLocale
+        transcriptionLocales = speechLocales
         starting = true
         isBusy = true
         generation = UUID()
@@ -239,7 +241,7 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
                                 transcriptionNote: transcriptionEnabled ? "Transcription has not completed." : "Automatic transcription is off.")
             try await store.insert(moment)
             lastSavedMoment = moment
-            if transcriptionEnabled { await transcribeStoredAudio(moment, url: url, locale: transcriptionLocale) }
+            if transcriptionEnabled { await transcribeStoredAudio(moment, url: url, locales: transcriptionLocales) }
             status = lastError != nil ? "Meeting saved with warnings" : (transcript.isEmpty ? "Meeting saved, no transcript available" : "Meeting saved")
         } catch {
             // Keep the original audio recoverable when indexing fails.
@@ -248,7 +250,7 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
         }
     }
 
-    func transcribeSaved(_ moment: Moment, locale: String) async {
+    func transcribeSaved(_ moment: Moment, locales: [String]) async {
         guard !isRecording, !isBusy, !starting, !finalizing, moment.kind == "meeting", let path = moment.videoPath else { return }
         let base = root.standardizedFileURL.resolvingSymlinksInPath()
         let url = base.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
@@ -257,26 +259,35 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
         }
         isBusy = true; finalizing = true; lastError = nil; transcriptionCancelled = false
         defer { isBusy = false; finalizing = false }
-        await transcribeStoredAudio(moment, url: url, locale: locale)
+        await transcribeStoredAudio(moment, url: url, locales: locales)
         status = lastError == nil ? "Transcript saved" : "Transcription needs attention"
     }
 
-    private func transcribeStoredAudio(_ moment: Moment, url: URL, locale: String) async {
+    private func transcribeStoredAudio(_ moment: Moment, url: URL, locales selection: [String]) async {
         transcribingMomentID = moment.id
         defer { transcribingMomentID = nil }
         transcript = ""; transcriptSegments = []; transcriptionWarnings = []
         if transcriptionCancelled {
             appendTranscriptionWarning("Transcription was interrupted. Complete audio was kept.")
-        } else if SFSpeechRecognizer.authorizationStatus() != .authorized {
-            appendTranscriptionWarning("Speech Recognition permission is not allowed. Enable it in Privacy settings to transcribe this recording.")
-        } else if let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)), recognizer.supportsOnDeviceRecognition, recognizer.isAvailable {
-            status = "Transcribing on device"
-            await transcribeChunks(url, recognizer: recognizer)
-            if transcript.isEmpty, transcriptionWarnings.isEmpty {
-                appendTranscriptionWarning("No speech was recognized in the selected language (\(locale)).")
-            }
+        } else if selection.isEmpty {
+            appendTranscriptionWarning("Choose at least one transcription language in Audio settings.")
         } else {
-            appendTranscriptionWarning("On-device speech recognition is unavailable for \(locale). Choose a supported transcription language in Audio settings.")
+            status = "Preparing on-device speech models"
+            let prepared = await languages.prepare(selection)
+            for note in prepared.notes { appendTranscriptionWarning(note) }
+            let names = prepared.locales.map { languages.name(for: $0.identifier(.bcp47)) }.joined(separator: ", ")
+            if prepared.locales.isEmpty || transcriptionCancelled {
+                if prepared.locales.isEmpty { appendTranscriptionWarning("No transcription language is ready on this Mac. Check Audio settings.") }
+            } else if #available(macOS 26, *), SpeechLanguages.usesSpeechAnalyzer {
+                await analyze(url, locales: prepared.locales)
+            } else if SFSpeechRecognizer.authorizationStatus() != .authorized {
+                appendTranscriptionWarning("Speech Recognition permission is not allowed. Enable it in Privacy settings to transcribe this recording.")
+            } else {
+                await transcribeChunks(url, locales: prepared.locales)
+            }
+            if transcript.isEmpty, transcriptionWarnings.isEmpty, !names.isEmpty {
+                appendTranscriptionWarning("No speech was recognized in \(names).")
+            }
         }
         do {
             let note = transcriptionWarnings.isEmpty ? nil : transcriptionWarnings.joined(separator: " ")
@@ -288,6 +299,7 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
 
     func cancelTranscription() {
         transcriptionCancelled = true
+        if let cancel = analysisCancel { analysisCancel = nil; Task { await cancel() } }
         if speechContinuation != nil {
             appendTranscriptionWarning("Transcription stopped. Available text and complete audio were kept.")
             finishTranscription()
@@ -303,7 +315,78 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
         appendWarning(message)
     }
 
-    private func transcribeChunks(_ url: URL, recognizer: SFSpeechRecognizer) async {
+    /// macOS 26 and later: every chosen language hears the whole recording in one SpeechAnalyzer pass.
+    @available(macOS 26, *)
+    private func analyze(_ url: URL, locales: [Locale]) async {
+        status = "Transcribing on device"
+        analysisReached = [:]
+        do {
+            let file = try AVAudioFile(forReading: url)
+            let duration = Double(file.length) / max(1, file.processingFormat.sampleRate)
+            let transcribers = locales.map { SpeechLanguages.transcriber($0) }
+            let analyzer = SpeechAnalyzer(modules: transcribers)
+            analysisCancel = { await analyzer.cancelAndFinishNow() }
+            defer { analysisCancel = nil }
+            let heard = try await withThrowingTaskGroup(of: (String, [RecognizedSpeech], String?).self) { group in
+                for (locale, transcriber) in zip(locales, transcribers) {
+                    let id = locale.identifier(.bcp47)
+                    group.addTask {
+                        var speech: [RecognizedSpeech] = []
+                        do {
+                            for try await result in transcriber.results {
+                                speech += Self.pieces(result.text, after: !speech.isEmpty, locale: id)
+                                await self.reportAnalysis(id, reached: result.range.end.seconds, of: duration, languages: locales.count)
+                            }
+                            return (id, speech, nil)
+                        } catch { return (id, speech, error.localizedDescription) }
+                    }
+                }
+                do { try await analyzer.start(inputAudioFile: file, finishAfterFile: true) }
+                catch { await analyzer.cancelAndFinishNow(); throw error }
+                var heard: [(String, [RecognizedSpeech], String?)] = []
+                for try await item in group { heard.append(item) }
+                return heard
+            }
+            if transcriptionCancelled {
+                appendTranscriptionWarning("Transcription stopped before the end of the meeting. Available text and complete audio were kept.")
+            } else {
+                for (id, _, failure) in heard { if let failure { appendTranscriptionWarning("\(languages.name(for: id)): \(failure)") } }
+            }
+            transcriptSegments = TranscriptMerge.segments(heard.map { (locale: $0.0, speech: $0.1) })
+            transcript = transcriptSegments.map(\.text).joined(separator: "\n")
+        } catch { appendTranscriptionWarning("On-device transcription: \(error.localizedDescription)") }
+    }
+
+    private func reportAnalysis(_ id: String, reached: Double, of duration: Double, languages count: Int) {
+        guard reached.isFinite else { return }
+        analysisReached[id] = max(analysisReached[id] ?? 0, reached)
+        let done = analysisReached.count < count ? 0 : analysisReached.values.min() ?? 0
+        status = "Transcribing on device, \(Int(min(done, duration))) / \(Int(duration)) seconds"
+    }
+
+    @available(macOS 26, *)
+    nonisolated private static func pieces(_ text: AttributedString, after earlier: Bool, locale: String) -> [RecognizedSpeech] {
+        var pieces: [RecognizedSpeech] = []
+        let joiner = TranscriptMerge.joiner(for: locale)
+        if earlier, !joiner.isEmpty, text.characters.first?.isWhitespace == false { pieces.append(RecognizedSpeech(text: joiner)) }
+        for run in text.runs {
+            let range = run.audioTimeRange
+            pieces.append(RecognizedSpeech(text: String(text[run.range].characters), start: range?.start.seconds,
+                                           end: range?.end.seconds, confidence: run.transcriptionConfidence))
+        }
+        return pieces
+    }
+
+    /// Before macOS 26: each chosen language transcribes 50-second chunks with on-device recognition.
+    private func transcribeChunks(_ url: URL, locales: [Locale]) async {
+        let recognizers = locales.compactMap { locale -> (String, SFSpeechRecognizer)? in
+            guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.supportsOnDeviceRecognition, recognizer.isAvailable else { return nil }
+            return (locale.identifier(.bcp47), recognizer)
+        }
+        guard !recognizers.isEmpty else {
+            appendTranscriptionWarning("On-device speech recognition is unavailable for the chosen languages. Check Audio settings.")
+            return
+        }
         let directory = url.deletingLastPathComponent().appendingPathComponent(".transcript-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         do {
@@ -314,7 +397,7 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
                 throw CaptureFailure("The audio duration is invalid or exceeds the meeting limit.")
             }
             var offset = 0.0
-            var parts: [String] = []
+            var heard: [String: [RecognizedSpeech]] = [:]
             while offset < duration {
                 guard !transcriptionCancelled, !Task.isCancelled else {
                     appendTranscriptionWarning("Transcription stopped before the end of the meeting. Complete audio was kept.")
@@ -326,16 +409,24 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
                     try await SystemAudioMedia.chunk(asset: asset,
                         range: CMTimeRange(start: CMTime(seconds: offset, preferredTimescale: 48000), duration: CMTime(seconds: end - offset, preferredTimescale: 48000)),
                         destination: chunkURL)
-                    if transcriptionCancelled { try? FileManager.default.removeItem(at: chunkURL); continue }
-                    status = "Transcribing on device, \(Int(offset)) / \(Int(duration)) seconds"
-                    let chunk = await transcribe(chunkURL, recognizer: recognizer)
-                    if !chunk.text.isEmpty {
-                        parts.append(chunk.text)
-                        let start = offset + max(0, min(chunk.start ?? 0, end - offset - 0.001))
-                        let finish = min(end, max(start + 0.001, offset + (chunk.end ?? (end - offset))))
-                        transcriptSegments.append(TranscriptSegment(start: start, end: finish, text: chunk.text))
+                    for (id, recognizer) in recognizers where !transcriptionCancelled {
+                        let language = recognizers.count > 1 ? " (\(languages.name(for: id)))" : ""
+                        status = "Transcribing on device\(language), \(Int(offset)) / \(Int(duration)) seconds"
+                        let chunk = await transcribe(chunkURL, recognizer: recognizer)
+                        guard !chunk.pieces.isEmpty else { continue }
+                        var pieces = heard[id] ?? []
+                        if !pieces.isEmpty { pieces.append(RecognizedSpeech(text: TranscriptMerge.joiner(for: id))) }
+                        let span = end - offset
+                        pieces += chunk.pieces.map { piece in
+                            var shifted = piece
+                            shifted.start = piece.start.map { offset + min(max(0, $0), span) }
+                            shifted.end = piece.end.map { offset + min(max(0, $0), span) }
+                            return shifted
+                        }
+                        heard[id] = pieces
                     }
-                    transcript = parts.joined(separator: "\n")
+                    transcriptSegments = TranscriptMerge.segments(heard.map { (locale: $0.key, speech: $0.value) })
+                    transcript = transcriptSegments.map(\.text).joined(separator: "\n")
                 } catch { appendTranscriptionWarning("Transcript gap at \(Int(offset)) seconds: \(error.localizedDescription)") }
                 try? FileManager.default.removeItem(at: chunkURL)
                 offset = end
@@ -353,14 +444,11 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
             request.requiresOnDeviceRecognition = true
             request.shouldReportPartialResults = true
             speechTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-                let text = result?.bestTranscription.formattedString
-                let timedWords = result?.bestTranscription.segments.filter { $0.timestamp.isFinite && $0.duration.isFinite && $0.duration > 0 }
-                let start = timedWords?.first?.timestamp
-                let end = timedWords?.last.map { $0.timestamp + $0.duration }
+                let pieces = result.map { Self.pieces($0.bestTranscription) }
                 let finished = result?.isFinal == true || error != nil
                 Task { @MainActor in
                     guard let self, self.speechGeneration == token, self.speechContinuation != nil else { return }
-                    if let text { self.speechChunk = SpeechChunk(text: text, start: start, end: end) }
+                    if let pieces { self.speechChunk = SpeechChunk(pieces: pieces) }
                     if finished {
                         if let error { self.appendTranscriptionWarning("On-device transcription: \(error.localizedDescription)") }
                         self.finishTranscription()
@@ -374,6 +462,25 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
                 self.finishTranscription()
             }
         }
+    }
+
+    /// Words with their timing, plus the spacing and punctuation between them in the formatted text.
+    nonisolated private static func pieces(_ transcription: SFTranscription) -> [RecognizedSpeech] {
+        let text = transcription.formattedString as NSString
+        var pieces: [RecognizedSpeech] = []
+        var cursor = 0
+        for segment in transcription.segments {
+            let range = segment.substringRange
+            guard range.location != NSNotFound, range.location >= cursor, NSMaxRange(range) <= text.length else { continue }
+            if range.location > cursor { pieces.append(RecognizedSpeech(text: text.substring(with: NSRange(location: cursor, length: range.location - cursor)))) }
+            let timed = segment.timestamp.isFinite && segment.duration.isFinite && segment.duration >= 0
+            pieces.append(RecognizedSpeech(text: text.substring(with: range), start: timed ? segment.timestamp : nil,
+                                           end: timed ? segment.timestamp + segment.duration : nil,
+                                           confidence: segment.confidence > 0 ? Double(segment.confidence) : nil))
+            cursor = NSMaxRange(range)
+        }
+        if cursor < text.length { pieces.append(RecognizedSpeech(text: text.substring(from: cursor))) }
+        return pieces
     }
 
     private func finishTranscription() {

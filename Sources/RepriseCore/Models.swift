@@ -28,12 +28,23 @@ public struct Moment: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+extension Moment {
+    /// A screen memory whose pixels moved into an archive movie, addressed by frame time.
+    public var archivedFrame: (path: String, offset: Double)? {
+        guard kind == "screen", imagePath.isEmpty, let path = videoPath, !path.isEmpty, let offset = videoOffset else { return nil }
+        return (path, offset)
+    }
+    public var hasScreenImage: Bool { kind == "screen" && (!imagePath.isEmpty || archivedFrame != nil) }
+}
+
 public struct TranscriptSegment: Codable, Hashable, Sendable {
     public let start: Double
     public let end: Double
     public let text: String
-    public init(start: Double, end: Double, text: String) {
-        self.start = start; self.end = end; self.text = text
+    /// Recognizer locale that produced this text; nil for transcripts saved before multilingual support.
+    public let locale: String?
+    public init(start: Double, end: Double, text: String, locale: String? = nil) {
+        self.start = start; self.end = end; self.text = text; self.locale = locale
     }
     public var isValid: Bool { start.isFinite && end.isFinite && start >= 0 && end > start && !text.isEmpty }
 }
@@ -60,6 +71,8 @@ public struct LibraryStats: Sendable {
     public var oldest: Date?
     public var newest: Date?
     public var apps: [String] = []
+    /// Screen memories whose full image lives in a compressed video segment.
+    public var archivedFrames: Int = 0
     public init() {}
 }
 
@@ -91,7 +104,28 @@ public struct CaptureSettings: Codable, Equatable, Sendable {
     public var excludedBundleIDs: [String] = ["com.apple.keychainaccess", "com.1password.1password", "com.agilebits.onepassword7", "com.bitwarden.desktop"]
     public var excludedTitleTerms: [String] = ["Private Browsing", "Incognito", "InPrivate"]
     public var ocrLanguages: [String] = ["en-US", "ko-KR"]
+    /// Older screenshots move into HEVC segments; recent ones stay as still images for instant viewing.
+    public var archiveOlderFrames: Bool = true
+    public var archiveQuality: Double = FrameArchive.balancedQuality
     public init() {}
+
+    // Each key falls back on its own, so a setting added in a later version never resets the others.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = CaptureSettings()
+        interval = values.value(.interval, default: defaults.interval)
+        maxDimension = values.value(.maxDimension, default: defaults.maxDimension)
+        imageQuality = values.value(.imageQuality, default: defaults.imageQuality)
+        deduplicate = values.value(.deduplicate, default: defaults.deduplicate)
+        pauseOnBattery = values.value(.pauseOnBattery, default: defaults.pauseOnBattery)
+        retentionDays = values.value(.retentionDays, default: defaults.retentionDays)
+        storageLimitGB = values.value(.storageLimitGB, default: defaults.storageLimitGB)
+        excludedBundleIDs = values.value(.excludedBundleIDs, default: defaults.excludedBundleIDs)
+        excludedTitleTerms = values.value(.excludedTitleTerms, default: defaults.excludedTitleTerms)
+        ocrLanguages = values.value(.ocrLanguages, default: defaults.ocrLanguages)
+        archiveOlderFrames = values.value(.archiveOlderFrames, default: defaults.archiveOlderFrames)
+        archiveQuality = values.value(.archiveQuality, default: defaults.archiveQuality)
+    }
 
     /// Zero keeps the display's backing pixels; explicit limits never upscale.
     public func pixelDimensions(width: Int, height: Int) -> (width: Int, height: Int) {
@@ -100,6 +134,13 @@ public struct CaptureSettings: Codable, Equatable, Sendable {
         let limit = max(640, min(maxDimension, 7680))
         let scale = min(1, Double(limit) / Double(max(width, height)))
         return (max(1, Int(Double(width) * scale)), max(1, Int(Double(height) * scale)))
+    }
+}
+
+extension KeyedDecodingContainer {
+    /// One stored setting, or its default when this version wrote no such key or an incompatible value.
+    public func value<T: Decodable>(_ key: Key, default fallback: T) -> T {
+        (try? decodeIfPresent(T.self, forKey: key)) ?? fallback
     }
 }
 

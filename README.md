@@ -63,7 +63,7 @@ downloaded-installation test on every supported macOS version.
 | Screen memory | Periodic ScreenCaptureKit still frames, on-device Vision OCR, local full-text index |
 | Timeline | Full-screen overlay, app icons and icon-derived colors, calendar, compressed recording gaps, 30-second navigation |
 | Search | Local keyword search, AI query planning, source-linked answers, follow-up questions, saved conversations |
-| Meetings | Explicit microphone recording, optional system audio, post-recording on-device transcription, inline playback and timestamp seeking |
+| Meetings | Explicit microphone recording, optional system audio, post-recording on-device transcription in up to five languages at once, inline playback and timestamp seeking |
 | AI providers | Codex, Claude and Grok through installed subscription CLIs; model selection and reported token usage |
 | MCP | Opt-in read-only memory search for Claude Desktop, Claude Code, Codex, Cursor and compatible local clients |
 | Appearance | System/custom accent, system/manual light and dark modes, text size, transitions and optional edge glow |
@@ -116,18 +116,21 @@ require a remote HTTP server cannot connect directly. [Setup and tools](docs/MCP
 
 The default vault is `~/Library/Application Support/Reprise`. It is independent of
 the app version and contains SQLite, images, audio, transcripts, search history and
-usage. **The vault is not application-encrypted.** Protect your Mac and backups.
+usage. The folder is private to your macOS account, but **the vault is not
+application-encrypted**: other apps running as you can read it. Protect your Mac and backups.
 Reprise does not bundle any recorded memories or credentials in its releases.
 
 Capture defaults to native Retina resolution, 85% image quality and a 3-second
 interval. Settings expose smaller resolutions, intervals, retention and storage
 limits. Unchanged-screen deduplication, HEIC with JPEG fallback, separate 400px
-thumbnails, bounded capture/OCR work, and 96 MB preview / 8 MB thumbnail caches
+thumbnails, HEVC compression of screens older than 15 minutes (roughly 4–7 times
+smaller in our samples), bounded capture/OCR work, and 96 MB preview / 8 MB thumbnail caches
 limit background work. These are implementation choices, not measured guarantees
 against another app. CPU and process memory are visible; GPU usage is not measured.
 
-Automatic transcription saves the recording first, then processes bounded chunks
-on-device when the selected speech language is supported. Failures remain visible
+Automatic transcription saves the recording first, then transcribes it on-device in
+each chosen language and keeps, for every passage, the language that fits it best.
+On macOS 26 and later, speech models download when a language is chosen. Failures remain visible
 and the original audio is preserved. A recording can last at most four hours.
 Title-based privacy and meeting detection are best-effort, not complete protection.
 Review [data flow and limitations](docs/PRIVACY.md) before recording sensitive work.

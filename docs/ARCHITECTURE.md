@@ -14,12 +14,19 @@ Reprise is a Swift Package Manager macOS application. It has no backend service.
 
 ScreenCaptureKit supplies one bounded still capture at a time. Vision performs
 on-device OCR; image encoding/deduplication runs off the main actor. Full-size
-images and thumbnails are separate. The SQLite actor owns prepared statements,
-WAL access, FTS5 and bounded caches. Media paths are vault-relative and validated
-before file operations. Database migrations are additive.
+images and thumbnails are separate. After 15 minutes, `FrameArchiver` moves full-size
+stills of one pixel size into HEVC movies (frame i at i seconds, keyframes every 30
+frames) and points each row at its movie and frame time in one transaction; a movie is
+verified before any still is deleted. Deleting a compressed screen queues its movie for
+re-encoding without that frame. The SQLite actor owns prepared statements, WAL access,
+FTS5 and bounded caches. Media paths are vault-relative and validated before file
+operations. Database migrations are additive, and settings decode key by key.
 
 Audio combines explicit microphone input and optional system audio. Stopping saves
-the complete recording before background, bounded on-device Speech transcription.
+the complete recording before on-device transcription. On macOS 26 and later one
+SpeechAnalyzer pass runs a SpeechTranscriber per chosen language; `TranscriptMerge`
+splits each result into timed phrases and keeps the most confident non-overlapping
+ones across languages. Earlier systems transcribe bounded chunks per language.
 Audio duration, transcript segments and failure notes persist with each memory.
 
 ## Retrieval And UI

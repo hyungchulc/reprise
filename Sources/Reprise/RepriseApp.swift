@@ -44,6 +44,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var closeObserver: NSObjectProtocol?
     private var restartObserver: NSObjectProtocol?
     private var updateObserver: NSObjectProtocol?
+    private var powerOffObserver: NSObjectProtocol?
+    private var poweringOff = false
     private var restartPending = false
     private var terminationTask: Task<Void, Never>?
     private var terminationReady = false
@@ -72,6 +74,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateObserver = NotificationCenter.default.addObserver(forName: .repriseQuitForUpdate, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.closeSheetsAndQuit(resumeCapture: true) }
         }
+        // Restart, shut down and log out quit apps too; recording that was on continues afterwards.
+        powerOffObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.poweringOff = true }
+        }
         if model.showOnboarding || model.preferences.showOnLaunch { explorer?.show() }
         Task { await model.start() }
     }
@@ -81,6 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if terminationReady { return .terminateNow }
         if terminationTask != nil { return .terminateCancel }
         guard let model = AppRuntime.model else { return .terminateNow }
+        model.endCaptureSession(poweringOff: poweringOff)
         model.shutdown(); model.meeting.cancelTranscription()
         if !model.capture.isRecording && !model.meeting.isRecording && !model.meeting.isBusy { return .terminateNow }
         // Return to the main queue before awaiting MainActor capture/audio cleanup.

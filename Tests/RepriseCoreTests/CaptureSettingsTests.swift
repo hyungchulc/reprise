@@ -33,4 +33,16 @@ final class CaptureSettingsTests: XCTestCase {
         let native = try JSONDecoder().decode(CaptureSettings.self, from: JSONEncoder().encode(CaptureSettings()))
         XCTAssertEqual(native.maxDimension, 0)
     }
+
+    func testSettingsFromEarlierVersionsKeepTheirValues() throws {
+        // Saved by 0.4, before compression settings existed.
+        let saved = #"{"maxDimension":1600,"retentionDays":90,"interval":5,"storageLimitGB":40,"excludedTitleTerms":["Secret"],"pauseOnBattery":true,"ocrLanguages":["ko-KR"],"excludedBundleIDs":["com.example.vault"],"deduplicate":false,"imageQuality":0.7}"#
+        let restored = try JSONDecoder().decode(CaptureSettings.self, from: Data(saved.utf8))
+        XCTAssertEqual(restored.retentionDays, 90)
+        XCTAssertEqual(restored.excludedBundleIDs, ["com.example.vault"])
+        XCTAssertEqual(restored.interval, 5)
+        XCTAssertFalse(restored.deduplicate)
+        XCTAssertTrue(restored.archiveOlderFrames)
+        XCTAssertEqual(restored.archiveQuality, FrameArchive.balancedQuality)
+    }
 }

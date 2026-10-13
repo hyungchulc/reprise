@@ -51,7 +51,7 @@ actor CaptureImageProcessor {
             let id = UUID().uuidString
             let quality = settings.imageQuality.isFinite ? min(1, max(0.2, settings.imageQuality)) : 0.85
             var imagePath = "captures/\(id).heic"
-            let thumbnailPath = "captures/\(id)-thumb.jpg"
+            var thumbnailPath = "captures/\(id)-thumb.heic"
             do {
                 if !encode(image, to: root.appendingPathComponent(imagePath), type: .heic, quality: quality) {
                     try? FileManager.default.removeItem(at: root.appendingPathComponent(imagePath))
@@ -60,8 +60,13 @@ actor CaptureImageProcessor {
                         throw CaptureFailure("Unable to encode captured image.")
                     }
                 }
-                guard let thumbnail = resized(image, maxDimension: 400), encode(thumbnail, to: root.appendingPathComponent(thumbnailPath), type: .jpeg, quality: 0.7) else {
-                    throw CaptureFailure("Unable to encode thumbnail.")
+                guard let thumbnail = resized(image, maxDimension: 400) else { throw CaptureFailure("Unable to encode thumbnail.") }
+                if !encode(thumbnail, to: root.appendingPathComponent(thumbnailPath), type: .heic, quality: 0.6) {
+                    try? FileManager.default.removeItem(at: root.appendingPathComponent(thumbnailPath))
+                    thumbnailPath = "captures/\(id)-thumb.jpg"
+                    guard encode(thumbnail, to: root.appendingPathComponent(thumbnailPath), type: .jpeg, quality: 0.7) else {
+                        throw CaptureFailure("Unable to encode thumbnail.")
+                    }
                 }
                 let paths = [imagePath, thumbnailPath]
                 var bytes: Int64 = 0

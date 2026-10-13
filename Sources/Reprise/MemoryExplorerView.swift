@@ -185,7 +185,7 @@ struct MemoryExplorerView: View {
             if moment.kind == "meeting" {
                 Color.clear
             } else {
-                MemoryImage(path: moment.imagePath, root: model.root,
+                MemoryImage(screenOf: moment, root: model.root,
                             maxPixels: min(8192, Int((max(size.width, size.height) * displayScale * zoom).rounded(.up))),
                             keepsPreviousImage: true)
                     .frame(width: size.width * zoom, height: size.height * zoom)

@@ -25,10 +25,26 @@ public actor MomentStore {
     private var cacheDataVersion: Int64?
     private static let columns = "id,timestamp,app_name,bundle_id,window_title,text,image_path,thumbnail_path,video_path,video_offset,bookmarked,kind,byte_count,audio_duration,transcript_segments,transcription_note"
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    /// Full-text rows change only with the indexed columns, not with bookmarks or archive moves.
+    private static let updateTrigger = """
+        AFTER UPDATE OF app_name,window_title,text ON moments BEGIN
+            INSERT INTO moments_fts(moments_fts,rowid,app_name,window_title,text)
+            VALUES('delete',old.rowid,old.app_name,old.window_title,old.text);
+            INSERT INTO moments_fts(rowid,app_name,window_title,text)
+            VALUES(new.rowid,new.app_name,new.window_title,new.text);
+        END
+        """
 
     public init(root: URL, readOnly: Bool = false) throws {
         let requestedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
-        if !readOnly { try FileManager.default.createDirectory(at: requestedRoot, withIntermediateDirectories: true) }
+        if !readOnly {
+            try FileManager.default.createDirectory(at: requestedRoot, withIntermediateDirectories: true)
+            // Screen text and transcripts are private to this account, including from other local users.
+            var info = stat()
+            if lstat(requestedRoot.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR, info.st_mode & 0o077 != 0 {
+                _ = chmod(requestedRoot.path, 0o700)
+            }
+        }
         // SQLite NOFOLLOW checks parent components too; Foundation may abbreviate /private/var to /var.
         guard let physicalRoot = realpath(requestedRoot.path, nil) else { throw MomentStoreError.invalidMediaPath(requestedRoot.path) }
         let sqlitePath = String(cString: physicalRoot) + "/library.sqlite"
@@ -92,12 +108,9 @@ public actor MomentStore {
                     INSERT INTO moments_fts(moments_fts,rowid,app_name,window_title,text)
                     VALUES('delete',old.rowid,old.app_name,old.window_title,old.text);
                 END;
-                CREATE TRIGGER IF NOT EXISTS moments_update AFTER UPDATE ON moments BEGIN
-                    INSERT INTO moments_fts(moments_fts,rowid,app_name,window_title,text)
-                    VALUES('delete',old.rowid,old.app_name,old.window_title,old.text);
-                    INSERT INTO moments_fts(rowid,app_name,window_title,text)
-                    VALUES(new.rowid,new.app_name,new.window_title,new.text);
-                END;
+                CREATE TRIGGER IF NOT EXISTS moments_update \(Self.updateTrigger);
+                CREATE INDEX IF NOT EXISTS moments_stills ON moments(timestamp) WHERE kind='screen' AND video_path IS NULL AND bookmarked=0;
+                CREATE TABLE IF NOT EXISTS archive_purges (path TEXT PRIMARY KEY, requested REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS usage (
                     id TEXT PRIMARY KEY, timestamp REAL NOT NULL, provider TEXT NOT NULL,
                     model TEXT NOT NULL, input_tokens INTEGER, output_tokens INTEGER,
@@ -119,6 +132,20 @@ public actor MomentStore {
             if !columns.contains("audio_duration") { try Self.execute(connection, "ALTER TABLE moments ADD COLUMN audio_duration REAL") }
             if !columns.contains("transcript_segments") { try Self.execute(connection, "ALTER TABLE moments ADD COLUMN transcript_segments TEXT") }
             if !columns.contains("transcription_note") { try Self.execute(connection, "ALTER TABLE moments ADD COLUMN transcription_note TEXT") }
+            // Earlier libraries re-indexed text on every update, including bookmark and archive changes.
+            var trigger: OpaquePointer?
+            guard sqlite3_prepare_v2(connection, "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='moments_update'", -1, &trigger, nil) == SQLITE_OK else {
+                throw MomentStoreError.database(String(cString: sqlite3_errmsg(connection)))
+            }
+            let triggerSQL = sqlite3_step(trigger) == SQLITE_ROW ? sqlite3_column_text(trigger, 0).map { String(cString: $0) } : nil
+            sqlite3_finalize(trigger)
+            if let triggerSQL, !triggerSQL.contains("UPDATE OF") {
+                try Self.execute(connection, "BEGIN IMMEDIATE")
+                do {
+                    try Self.execute(connection, "DROP TRIGGER moments_update; CREATE TRIGGER moments_update \(Self.updateTrigger); COMMIT")
+                } catch { try? Self.execute(connection, "ROLLBACK"); throw error }
+            }
+            for suffix in ["", "-wal", "-shm"] { _ = lchmod(sqlitePath + suffix, 0o600) }
             }
         } catch {
             sqlite3_close(connection)
@@ -368,24 +395,159 @@ public actor MomentStore {
         forget(id)
     }
 
-    public func delete(ids: [String]) throws {
+    /// Shared media survives while another memory references it. With `purgeArchivedFrames`, an
+    /// archive movie that still serves other memories is queued for re-encoding without these frames.
+    public func delete(ids: [String], purgeArchivedFrames: Bool = false) throws {
         var media = Set<String>()
+        var movies = Set<String>()
         try transaction {
             for id in Set(ids) {
                 if let moment = try moment(id: id) {
                     media.formUnion([moment.imagePath, moment.thumbnailPath, moment.videoPath ?? ""].filter { !$0.isEmpty })
+                    if purgeArchivedFrames, let frame = moment.archivedFrame { movies.insert(frame.path) }
                 }
                 try run("DELETE FROM moments WHERE id=?", [.text(id)])
             }
-            for path in media {
-                let statement = try prepare("SELECT 1 FROM moments WHERE image_path=? OR thumbnail_path=? OR video_path=? LIMIT 1")
-                defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }
-                try bind([.text(path), .text(path), .text(path)], to: statement)
-                if try step(statement) { media.remove(path) }
+            media = try media.filter { try !isReferenced($0) }
+            for movie in movies where !media.contains(movie) {
+                try run("INSERT OR IGNORE INTO archive_purges(path,requested) VALUES(?,?)", [.text(movie), .real(Date().timeIntervalSince1970)])
             }
         }
         for id in ids { forget(id) }
         for path in media { removeMedia(path) }
+    }
+
+    public struct ArchiveEntry: Sendable {
+        public let id: String
+        public let imagePath: String
+        public let offset: Double
+        public let byteCount: Int64
+        public init(id: String, imagePath: String, offset: Double, byteCount: Int64) {
+            self.id = id; self.imagePath = imagePath; self.offset = offset; self.byteCount = byteCount
+        }
+    }
+
+    public struct ArchiveMove: Sendable {
+        public let id: String
+        public let from: Double
+        public let to: Double
+        public let byteCount: Int64
+        public init(id: String, from: Double, to: Double, byteCount: Int64) {
+            self.id = id; self.from = from; self.to = to; self.byteCount = byteCount
+        }
+    }
+
+    /// Recorded screen stills old enough to archive, oldest first. Bookmarks, imports and
+    /// meetings keep their original files.
+    public func archivableFrames(before date: Date, limit: Int) throws -> [Moment] {
+        let statement = try prepare("""
+            SELECT \(Self.columns) FROM moments WHERE kind='screen' AND video_path IS NULL AND bookmarked=0
+            AND timestamp<? AND image_path LIKE 'captures/%' ORDER BY timestamp,id LIMIT ?
+            """)
+        defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }
+        try bind([.real(date.timeIntervalSince1970), .integer(Int64(max(0, min(limit, 5_000))))], to: statement)
+        var rows: [Moment] = []
+        while try step(statement) { rows.append(readMoment(statement)) }
+        return rows
+    }
+
+    /// Points stills at their frames in one transaction, then deletes the stills nothing else
+    /// references. Rows changed or deleted since selection are left alone. Returns archived IDs.
+    public func archive(_ entries: [ArchiveEntry], into videoPath: String) throws -> [String] {
+        let movie = try normalizedMediaPath(videoPath)
+        var archived: [String] = []
+        var released = Set<String>()
+        try transaction {
+            for entry in entries {
+                try run("""
+                    UPDATE moments SET image_path='',video_path=?,video_offset=?,byte_count=?
+                    WHERE id=? AND image_path=? AND video_path IS NULL AND kind='screen'
+                    """, [.text(movie), .real(entry.offset), .integer(max(0, entry.byteCount)), .text(entry.id), .text(entry.imagePath)])
+                if sqlite3_changes(database) > 0 { archived.append(entry.id); released.insert(entry.imagePath) }
+            }
+            released = try released.filter { try !isReferenced($0) }
+        }
+        for id in archived { forget(id) }
+        for path in released { removeMedia(path) }
+        return archived
+    }
+
+    public func pendingArchivePurges() throws -> [String] {
+        try selectedIDs("SELECT path FROM archive_purges ORDER BY requested,path LIMIT 64", [])
+    }
+
+    public func frames(inArchive videoPath: String) throws -> [Moment] {
+        let statement = try prepare("SELECT \(Self.columns) FROM moments WHERE video_path=? AND kind='screen' AND image_path='' ORDER BY video_offset,id")
+        defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }
+        try bind([.text(videoPath)], to: statement)
+        var rows: [Moment] = []
+        while try step(statement) { rows.append(readMoment(statement)) }
+        return rows
+    }
+
+    /// Moves frames into a re-encoded movie and settles the purge request. The old movie is
+    /// deleted once no memory references it. Returns the moved IDs.
+    @discardableResult
+    public func replaceArchive(_ oldPath: String, with newPath: String?, moves: [ArchiveMove]) throws -> [String] {
+        let replacement = try newPath.map { try normalizedMediaPath($0) }
+        var moved: [String] = []
+        var unreferenced = false
+        try transaction {
+            if let replacement {
+                for move in moves {
+                    try run("UPDATE moments SET video_path=?,video_offset=?,byte_count=? WHERE id=? AND video_path=? AND video_offset=? AND image_path=''",
+                            [.text(replacement), .real(move.to), .integer(max(0, move.byteCount)), .text(move.id), .text(oldPath), .real(move.from)])
+                    if sqlite3_changes(database) > 0 { moved.append(move.id) }
+                }
+            }
+            try run("DELETE FROM archive_purges WHERE path=?", [.text(oldPath)])
+            unreferenced = try !isReferenced(oldPath)
+        }
+        for id in moved { forget(id) }
+        if unreferenced { removeMedia(oldPath) }
+        return moved
+    }
+
+    /// A vault file URL for readers that need one, such as AVFoundation. The path may not leave
+    /// the vault or pass through a link, and must name a regular file.
+    public func mediaURL(_ path: String) throws -> URL {
+        let clean = try normalizedMediaPath(path)
+        guard !clean.isEmpty else { throw MomentStoreError.invalidMediaPath(path) }
+        let url = root.appendingPathComponent(clean)
+        var info = stat()
+        guard lstat(url.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { throw MomentStoreError.invalidMediaPath(path) }
+        return url
+    }
+
+    /// Removes capture and archive files no memory references, such as leftovers of an interrupted
+    /// capture or archive pass. Recent files are skipped: a capture writes media just before its row.
+    @discardableResult
+    public func removeUnreferencedMedia(olderThan age: TimeInterval = 3_600) throws -> Int64 {
+        let cutoff = Date().addingTimeInterval(-max(600, age))
+        var reclaimed: Int64 = 0
+        // An empty or replaced database is not evidence that every file is abandoned.
+        guard try storedBytes() > 0 else { return 0 }
+        for directory in ["captures", FrameArchive.directory] {
+            let base = root.appendingPathComponent(directory, isDirectory: true)
+            guard let files = FileManager.default.enumerator(atPath: base.path) else { continue }
+            while let name = files.nextObject() as? String {
+                guard let attributes = try? FileManager.default.attributesOfItem(atPath: base.appendingPathComponent(name).path),
+                      attributes[.type] as? FileAttributeType == .typeRegular,
+                      let modified = attributes[.modificationDate] as? Date, modified < cutoff else { continue }
+                let relative = "\(directory)/\(name)"
+                guard try !isReferenced(relative) else { continue }
+                removeMedia(relative)
+                reclaimed += (attributes[.size] as? NSNumber)?.int64Value ?? 0
+            }
+        }
+        return reclaimed
+    }
+
+    private func isReferenced(_ path: String) throws -> Bool {
+        let statement = try prepare("SELECT 1 FROM moments WHERE image_path=? OR thumbnail_path=? OR video_path=? LIMIT 1")
+        defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }
+        try bind([.text(path), .text(path), .text(path)], to: statement)
+        return try step(statement)
     }
 
     /// Bookmarks can keep the library above its requested budget. Nonpositive limits disable that constraint.
@@ -433,6 +595,9 @@ public actor MomentStore {
             if sqlite3_column_type(statement, 2) != SQLITE_NULL { result.oldest = Date(timeIntervalSince1970: sqlite3_column_double(statement, 2)) }
             if sqlite3_column_type(statement, 3) != SQLITE_NULL { result.newest = Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)) }
         }
+        let archived = try prepare("SELECT COUNT(*) FROM moments WHERE kind='screen' AND image_path='' AND video_path IS NOT NULL")
+        defer { sqlite3_reset(archived); sqlite3_clear_bindings(archived) }
+        if try step(archived) { result.archivedFrames = Int(sqlite3_column_int64(archived, 0)) }
         let apps = try prepare("SELECT DISTINCT app_name FROM moments ORDER BY app_name COLLATE NOCASE,app_name")
         defer { sqlite3_reset(apps); sqlite3_clear_bindings(apps) }
         while try step(apps) { result.apps.append(string(apps, 0)) }

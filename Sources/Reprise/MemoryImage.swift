@@ -1,45 +1,97 @@
 import AppKit
 import ImageIO
+import RepriseCore
 import SwiftUI
 
 actor ImageCache {
     static let shared = ImageCache()
     private let previews = NSCache<NSString, NSImage>()
     private let thumbnails = NSCache<NSString, NSImage>()
+    private var readers: [String: FrameReader] = [:]
+    private var readerOrder: [String] = []
     init() {
         previews.totalCostLimit = 96 * 1024 * 1024; previews.countLimit = 4
         thumbnails.totalCostLimit = 8 * 1024 * 1024; thumbnails.countLimit = 100
     }
-    func image(url: URL, maxPixels: Int) -> NSImage? {
+    func image(url: URL, maxPixels: Int) async -> NSImage? {
         guard !Task.isCancelled else { return nil }
         let cache = maxPixels <= 512 ? thumbnails : previews
-        let key = "\(url.path):\(maxPixels)" as NSString
+        let key = "\(url.absoluteString):\(maxPixels)" as NSString
         if let image = cache.object(forKey: key) { return image }
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
-              let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: maxPixels, kCGImageSourceShouldCacheImmediately: true] as CFDictionary) else { return nil }
+        let decoded: CGImage?
+        if let frame = FrameArchive.frameReference(url) {
+            decoded = try? await reader(frame.movie, maxPixels: maxPixels).image(at: frame.offset)
+        } else if let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) {
+            decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: maxPixels, kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
+        } else { decoded = nil }
+        guard let cgImage = decoded, !Task.isCancelled else { return nil }
         let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
         cache.setObject(image, forKey: key, cost: cgImage.bytesPerRow * cgImage.height)
         return image
     }
+
+    /// One decoder per recently viewed movie and size class, since scrubbing stays within a movie.
+    private func reader(_ movie: URL, maxPixels: Int) -> FrameReader {
+        let limit = maxPixels <= 1024 ? 1024 : (maxPixels <= 2048 ? 2048 : 0)
+        let key = "\(movie.path)|\(limit)"
+        readerOrder.removeAll { $0 == key }
+        readerOrder.append(key)
+        if let reader = readers[key] { return reader }
+        let reader = FrameReader(movie: movie, maxPixels: limit)
+        readers[key] = reader
+        if readerOrder.count > 6 { readers.removeValue(forKey: readerOrder.removeFirst()) }
+        return reader
+    }
+}
+
+/// Where a memory's full screen image lives: a still file, or a frame of an archive movie.
+enum MemoryMedia: Hashable {
+    case still(String)
+    case frame(String, Double)
+    init?(screenOf moment: Moment) {
+        if !moment.imagePath.isEmpty { self = .still(moment.imagePath) }
+        else if let frame = moment.archivedFrame { self = .frame(frame.path, frame.offset) }
+        else { return nil }
+    }
+    var key: String {
+        switch self { case .still(let path): return path; case .frame(let path, let offset): return "\(path)#\(offset)" }
+    }
+    func url(in root: URL) -> URL {
+        switch self {
+        case .still(let path): return root.appendingPathComponent(path)
+        case .frame(let path, let offset): return FrameArchive.frameURL(movie: root.appendingPathComponent(path), offset: offset)
+        }
+    }
 }
 
 struct MemoryImage: View {
-    let path: String
+    let media: MemoryMedia?
     let root: URL
     let maxPixels: Int
     var keepsPreviousImage = false
     @StateObject private var loader = MemoryImageLoader()
-    private var key: String { "\(root.path):\(path):\(maxPixels)" }
+
+    init(path: String, root: URL, maxPixels: Int, keepsPreviousImage: Bool = false) {
+        self.init(media: path.isEmpty ? nil : .still(path), root: root, maxPixels: maxPixels, keepsPreviousImage: keepsPreviousImage)
+    }
+    init(screenOf moment: Moment, root: URL, maxPixels: Int, keepsPreviousImage: Bool = false) {
+        self.init(media: MemoryMedia(screenOf: moment), root: root, maxPixels: maxPixels, keepsPreviousImage: keepsPreviousImage)
+    }
+    init(media: MemoryMedia?, root: URL, maxPixels: Int, keepsPreviousImage: Bool) {
+        self.media = media; self.root = root; self.maxPixels = maxPixels; self.keepsPreviousImage = keepsPreviousImage
+    }
+
+    private var key: String { "\(root.path):\(media?.key ?? ""):\(maxPixels)" }
     var body: some View {
         Group {
             if let image = loader.image, keepsPreviousImage || loader.loadedKey == key { Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit) }
             else if keepsPreviousImage { Color.clear }
-            else { ZStack { Color(nsColor: .controlBackgroundColor); Image(systemName: path.isEmpty ? "waveform" : "photo").foregroundStyle(.tertiary) } }
+            else { ZStack { Color(nsColor: .controlBackgroundColor); Image(systemName: media == nil ? "waveform" : "photo").foregroundStyle(.tertiary) } }
         }
         .transaction { $0.animation = nil }
         .onChange(of: key, initial: true) { _, _ in
-            guard !path.isEmpty else { loader.clear(); return }
-            loader.request(key: key, url: root.appendingPathComponent(path), maxPixels: maxPixels, keepsPreviousImage: keepsPreviousImage)
+            guard let media else { loader.clear(); return }
+            loader.request(key: key, url: media.url(in: root), maxPixels: maxPixels, keepsPreviousImage: keepsPreviousImage)
         }
         .onDisappear { loader.cancel() }
     }

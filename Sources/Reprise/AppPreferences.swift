@@ -1,4 +1,5 @@
 import AppKit
+import RepriseCore
 import SwiftUI
 
 enum IconPlacement: String, Codable, CaseIterable, Identifiable {
@@ -24,9 +25,40 @@ struct AppPreferences: Codable, Equatable {
     var detectMeetings = false
     var includeSystemAudio = true
     var transcribeMeetings = true
+    /// Meetings are transcribed in each of these languages; the first is also saved for earlier versions.
+    var speechLocales = SpeechLanguageSelection.defaults() { didSet { speechLocale = speechLocales.first ?? speechLocale } }
     var speechLocale = Locale.current.identifier
     var pauseReminders: Bool? = true
     var edgeGlow: Bool? = true
+
+    init() {}
+
+    // Each key falls back on its own, so a setting added in a later version never resets the others.
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = AppPreferences()
+        followSystemAppearance = values.value(.followSystemAppearance, default: defaults.followSystemAppearance)
+        darkMode = values.value(.darkMode, default: defaults.darkMode)
+        followSystemAccent = values.value(.followSystemAccent, default: defaults.followSystemAccent)
+        accentRed = values.value(.accentRed, default: defaults.accentRed)
+        accentGreen = values.value(.accentGreen, default: defaults.accentGreen)
+        accentBlue = values.value(.accentBlue, default: defaults.accentBlue)
+        textSize = values.value(.textSize, default: defaults.textSize)
+        animateSearch = values.value(.animateSearch, default: defaults.animateSearch)
+        iconPlacement = values.value(.iconPlacement, default: defaults.iconPlacement)
+        showOnLaunch = values.value(.showOnLaunch, default: defaults.showOnLaunch)
+        startRecordingOnLaunch = values.value(.startRecordingOnLaunch, default: defaults.startRecordingOnLaunch)
+        detectMeetings = values.value(.detectMeetings, default: defaults.detectMeetings)
+        includeSystemAudio = values.value(.includeSystemAudio, default: defaults.includeSystemAudio)
+        transcribeMeetings = values.value(.transcribeMeetings, default: defaults.transcribeMeetings)
+        speechLocale = values.value(.speechLocale, default: defaults.speechLocale)
+        // One saved language from an earlier version stays first, joined by this Mac's languages.
+        let migrated = values.contains(.speechLocale)
+            ? SpeechLanguageSelection.unique([speechLocale] + defaults.speechLocales, byLanguage: true, limit: 3) : defaults.speechLocales
+        speechLocales = values.value(.speechLocales, default: migrated)
+        pauseReminders = values.value(.pauseReminders, default: true)
+        edgeGlow = values.value(.edgeGlow, default: true)
+    }
 
     var colorScheme: ColorScheme? { followSystemAppearance ? nil : (darkMode ? .dark : .light) }
     var accent: Color { followSystemAccent ? Color(nsColor: .controlAccentColor) : Color(red: accentRed, green: accentGreen, blue: accentBlue) }

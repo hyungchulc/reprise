@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.0-alpha.1
+
+- Multilingual meeting transcription. Choose up to five languages in Audio settings.
+  On macOS 26 and later, every chosen language hears the recording in one on-device
+  SpeechAnalyzer pass, and each passage keeps the language whose recognizer is most
+  confident. Speech models download as soon as a language is chosen; no Speech
+  Recognition permission is needed. Earlier macOS versions use on-device Dictation
+  models for each language.
+- Screen compression. Screens older than 15 minutes move into HEVC movies, roughly
+  4–7 times smaller than the HEIC stills in our samples. Search text, thumbnails and
+  bookmarked screens are unchanged. Deleting a compressed screen also re-encodes its
+  movie without it. New thumbnails are HEIC. Settings > Storage > Compression.
+- Settings keep their values when a later version adds options. Earlier releases
+  reset every setting in that case.
+- Screen recording that was on resumes after a crash, force quit, power loss,
+  restart or shutdown.
+- The vault folder and database are now private to your macOS account (0700/0600);
+  the database was readable by other local accounts.
+- Bookmark and storage changes no longer rewrite the full-text index, and files left
+  by an interrupted capture or compression are cleaned up.
+
+The vault is still not application-encrypted. Apple Development signing and the
+Sparkle public key are unchanged; this release is still unnotarized.
+
 ## 0.4.0-alpha.3
 
 - Maintenance release to exercise the signed Sparkle update from alpha.2.

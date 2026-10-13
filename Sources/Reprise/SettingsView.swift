@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import ServiceManagement
-import Speech
 import SwiftUI
 import RepriseCore
 
@@ -115,13 +114,11 @@ struct SettingsView: View {
         Section("Audio") {
             Toggle("Include system audio", isOn: $model.preferences.includeSystemAudio)
             Toggle("Automatically transcribe after recording", isOn: $model.preferences.transcribeMeetings)
-            Picker("Transcription language", selection: $model.preferences.speechLocale) {
-                ForEach(SFSpeechRecognizer.supportedLocales().map(\.identifier).sorted(), id: \.self) { identifier in
-                    Text(Locale.current.localizedString(forIdentifier: identifier) ?? identifier).tag(identifier)
-                }
-            }.disabled(!model.preferences.transcribeMeetings)
             LabeledContent("Microphone", value: "System default input")
             LabeledContent("Recording limit", value: "4 hours")
+        }
+        Section("Transcription Languages") {
+            TranscriptionLanguageSettings(model: model, languages: model.speechLanguages)
         }
         Section("Meetings") {
             Toggle("Detect meeting windows", isOn: $model.preferences.detectMeetings)
@@ -154,10 +151,20 @@ struct SettingsView: View {
             if let oldest = model.stats.oldest { LabeledContent("Oldest memory") { Text(oldest, format: .dateTime.year().month().day().hour().minute()) } }
             LabeledContent("Recorded media", value: ByteCountFormatter.string(fromByteCount: model.stats.storedBytes, countStyle: .file))
             LabeledContent("Database", value: ByteCountFormatter.string(fromByteCount: model.stats.databaseBytes, countStyle: .file))
+            if model.stats.archivedFrames > 0 { LabeledContent("Compressed screens", value: model.stats.archivedFrames.formatted()) }
             Stepper("Retention: \(model.settings.retentionDays) days", value: $model.settings.retentionDays, in: 1...365)
             HStack { Text("Limit"); Slider(value: $model.settings.storageLimitGB, in: 1...100, step: 1); Text("\(Int(model.settings.storageLimitGB)) GB").monospacedDigit().frame(width: 55) }
             Button("Apply Retention Now", systemImage: "trash", role: .destructive) { confirmCleanup = true }
             Button("Open Library Folder", systemImage: "folder") { NSWorkspace.shared.open(model.root) }
+        }
+        Section("Compression") {
+            Toggle("Compress older screens", isOn: $model.settings.archiveOlderFrames)
+            Picker("Compressed quality", selection: $model.settings.archiveQuality) {
+                Text("Smaller").tag(0.5); Text("Balanced").tag(FrameArchive.balancedQuality); Text("Sharper").tag(0.8)
+            }.disabled(!model.settings.archiveOlderFrames)
+            Text("Screens older than 15 minutes are stored as HEVC video, about a sixth of the size. Search text, thumbnails and bookmarked screens are unchanged. Deleted screens are removed from the video too.")
+                .repriseFont(.caption).foregroundStyle(.secondary)
+            if let status = model.archiveStatus { Text(status).repriseFont(.caption).foregroundStyle(.orange) }
         }
         Section("Import & Export") {
             Button("Import Images...", systemImage: "square.and.arrow.down") { Task { await model.importImages() } }
@@ -268,7 +275,8 @@ struct AISettings: View {
 struct PermissionSettings: View {
     @ObservedObject var center: PermissionCenter
     var body: some View {
-        ForEach(PermissionCenter.Kind.allCases) { kind in
+        // SpeechAnalyzer transcribes without the Speech Recognition permission.
+        ForEach(PermissionCenter.Kind.allCases.filter { $0 != .speech || !SpeechLanguages.usesSpeechAnalyzer }) { kind in
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(kind.displayName)
@@ -351,5 +359,42 @@ final class ProcessMetrics: ObservableObject {
         let now = Date(); let elapsed = now.timeIntervalSince(lastTime)
         if lastCPU > 0 && elapsed > 0 { cpu = max(0, (seconds - lastCPU) / elapsed * 100) }
         lastCPU = seconds; lastTime = now
+    }
+}
+
+struct TranscriptionLanguageSettings: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var languages: SpeechLanguages
+    private var selection: [String] { model.preferences.speechLocales }
+    var body: some View {
+        ForEach(selection, id: \.self) { id in
+            HStack {
+                Text(languages.name(for: id))
+                Spacer()
+                state(languages.states[id])
+                Button { model.preferences.speechLocales.removeAll { $0 == id } } label: { Image(systemName: "minus.circle") }
+                    .buttonStyle(.borderless).help("Remove \(languages.name(for: id))").disabled(selection.count == 1)
+            }
+        }
+        Menu("Add Language") {
+            ForEach(languages.options.filter { !selection.contains($0.id) }) { option in
+                Button(option.name) { model.preferences.speechLocales.append(option.id) }
+            }
+        }.disabled(selection.count >= SpeechLanguageSelection.maximum || languages.options.isEmpty)
+        Text(SpeechLanguages.usesSpeechAnalyzer
+             ? "Each meeting is transcribed on this Mac in every chosen language, and each part keeps the language that fits it. Speech models download automatically, up to \(SpeechLanguageSelection.maximum) languages."
+             : "Each meeting is transcribed in every chosen language, and each part keeps the language that fits it. Add on-device models in System Settings > Keyboard > Dictation.")
+            .repriseFont(.caption).foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder private func state(_ value: SpeechLanguages.State?) -> some View {
+        switch value {
+        case .installed: Label("Ready", systemImage: "checkmark.circle.fill").labelStyle(.iconOnly).foregroundStyle(.green).help("Installed on this Mac")
+        case .downloading(let fraction): ProgressView(value: fraction).frame(width: 60).help("Downloading")
+        case .needsDownload: Text(SpeechLanguages.usesSpeechAnalyzer ? "Waiting to download" : "Needs Dictation model").repriseFont(.caption).foregroundStyle(.secondary)
+        case .unavailable: Text("Not available").repriseFont(.caption).foregroundStyle(.secondary)
+        case .failed(let message): Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).help(message)
+        case .checking, nil: ProgressView().controlSize(.small)
+        }
     }
 }

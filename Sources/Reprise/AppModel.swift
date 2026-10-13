@@ -19,6 +19,11 @@ final class AppModel: ObservableObject {
     let meetingDetector = MeetingDetector()
     let updater = AppUpdater()
     let shortcut = GlobalShortcut()
+    let speechLanguages = SpeechLanguages()
+    let archiver: FrameArchiver
+    /// Set while screen recording runs; still set at launch means the last run ended without
+    /// Pause or Quit, such as a crash, force quit or power loss, so recording resumes.
+    static let captureSessionKey = "captureSessionOpen"
     @Published var moments: [Moment] = []
     @Published var matchingMoments: [Moment] = []
     @Published var aiMatches: [Moment]?
@@ -56,8 +61,14 @@ final class AppModel: ObservableObject {
         didSet {
             UserDefaults.standard.set(try? JSONEncoder().encode(preferences), forKey: "appPreferences")
             applyPreferences()
+            // A newly chosen language downloads its speech model right away, not at the next meeting.
+            if preferences.transcribeMeetings, preferences.speechLocales != oldValue.speechLocales || !oldValue.transcribeMeetings {
+                let selection = preferences.speechLocales
+                Task { await speechLanguages.sync(selection) }
+            }
         }
     }
+    @Published private(set) var archiveStatus: String?
     @Published var settings: CaptureSettings
     @Published var provider: AIProviderConfiguration
     @Published var timeZone = TimeZone.autoupdatingCurrent
@@ -76,12 +87,15 @@ final class AppModel: ObservableObject {
     private var appliedCaptureSettings: CaptureSettings?
     private var searchRootQuery: String?
     private var updatingSearchDraft = false
+    private var archiveTask: Task<Void, Never>?
+    private var archiveRequested = false
 
     init(root: URL = ReprisePaths.root) throws {
         self.root = root
         store = try MomentStore(root: root)
         capture = CaptureEngine(store: store, root: root)
-        meeting = MeetingRecorder(store: store, root: root)
+        meeting = MeetingRecorder(store: store, root: root, languages: speechLanguages)
+        archiver = FrameArchiver(store: store, root: root)
         searchHistory = SearchHistory.load(root: root)
         let defaults = UserDefaults.standard
         preferences = defaults.data(forKey: "appPreferences").flatMap { try? JSONDecoder().decode(AppPreferences.self, from: $0) } ?? AppPreferences()
@@ -120,10 +134,18 @@ final class AppModel: ObservableObject {
         permissions.refresh()
         await reload()
         let resumeCapture = UserDefaults.standard.bool(forKey: "resumeCaptureAfterRestart")
+        let interrupted = UserDefaults.standard.bool(forKey: Self.captureSessionKey)
         UserDefaults.standard.removeObject(forKey: "resumeCaptureAfterRestart")
-        if !showOnboarding, preferences.startRecordingOnLaunch || resumeCapture, CGPreflightScreenCaptureAccess() {
+        if !showOnboarding, preferences.startRecordingOnLaunch || resumeCapture || interrupted, CGPreflightScreenCaptureAccess() {
             await capture.start(settings: settings); appliedCaptureSettings = settings
         }
+        UserDefaults.standard.set(capture.isRecording, forKey: Self.captureSessionKey)
+        Task {
+            let normalized = await speechLanguages.normalize(preferences.speechLocales)
+            if normalized != preferences.speechLocales { preferences.speechLocales = normalized }
+            else if preferences.transcribeMeetings { await speechLanguages.sync(normalized) }
+        }
+        startArchiving()
         heartbeat = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(30)) } catch { break }
@@ -371,13 +393,19 @@ final class AppModel: ObservableObject {
 
     func deleteSelected() async {
         guard let selected = selection else { return }
-        do { try await store.delete(ids: [selected.id]); selection = nil; await reload() }
-        catch { self.error = error.localizedDescription }
+        do {
+            // A deleted screen must not live on inside a shared archive movie.
+            try await store.delete(ids: [selected.id], purgeArchivedFrames: true)
+            selection = nil
+            if selected.archivedFrame != nil { archiveRequested = true }
+            await reload()
+        } catch { self.error = error.localizedDescription }
     }
 
     func toggleRecording() async {
         if capture.isRecording {
             await capture.stop()
+            UserDefaults.standard.set(false, forKey: Self.captureSessionKey)
             UserDefaults.standard.set(true, forKey: "recordingManuallyPaused")
             NotificationCenter.default.post(name: .repriseCapturePaused, object: nil)
             return
@@ -386,6 +414,7 @@ final class AppModel: ObservableObject {
         await capture.start(settings: settings)
         appliedCaptureSettings = settings
         if capture.isRecording {
+            UserDefaults.standard.set(true, forKey: Self.captureSessionKey)
             UserDefaults.standard.set(false, forKey: "recordingManuallyPaused")
             NotificationCenter.default.post(name: .repriseCloseMemory, object: nil)
         }
@@ -402,20 +431,22 @@ final class AppModel: ObservableObject {
         }
         await permissions.request(.microphone)
         guard permissions.microphone == .authorized else { error = "Microphone access is disabled in System Settings."; return }
-        if preferences.transcribeMeetings { await permissions.request(.speech) }
+        if preferences.transcribeMeetings && !SpeechLanguages.usesSpeechAnalyzer { await permissions.request(.speech) }
         if preferences.includeSystemAudio && !CGPreflightScreenCaptureAccess() { await permissions.request(.screenCapture) }
         await meeting.start(title: meetingDetector.candidate?.title ?? "Meeting", includeSystemAudio: preferences.includeSystemAudio,
-                            transcribe: preferences.transcribeMeetings, speechLocale: preferences.speechLocale)
+                            transcribe: preferences.transcribeMeetings, speechLocales: preferences.speechLocales)
         if !meeting.isRecording, let message = meeting.lastError { error = message }
     }
 
     func transcribeSelected() async {
         guard let moment = selection, moment.kind == "meeting", !meeting.isBusy, !meeting.isRecording else { return }
-        await permissions.request(.speech)
-        guard permissions.speech == .authorized else {
-            error = "Allow Speech Recognition in Privacy settings before transcribing."; return
+        if !SpeechLanguages.usesSpeechAnalyzer {
+            await permissions.request(.speech)
+            guard permissions.speech == .authorized else {
+                error = "Allow Speech Recognition in Privacy settings before transcribing."; return
+            }
         }
-        await meeting.transcribeSaved(moment, locale: preferences.speechLocale)
+        await meeting.transcribeSaved(moment, locales: preferences.speechLocales)
         if selection?.id == moment.id, let updated = meeting.lastSavedMoment, updated.id == moment.id { selection = updated }
     }
 
@@ -584,7 +615,65 @@ final class AppModel: ObservableObject {
         do { try await store.export(to: url, query: query) } catch { self.error = error.localizedDescription }
     }
 
-    func shutdown() { heartbeat?.cancel(); askTask?.cancel(); scrubTask?.cancel(); meetingDetector.stop() }
+    func shutdown() { heartbeat?.cancel(); askTask?.cancel(); scrubTask?.cancel(); archiveTask?.cancel(); meetingDetector.stop() }
+
+    /// Quit and pause close the session; a power-off with recording on resumes it at the next launch.
+    func endCaptureSession(poweringOff: Bool) {
+        if poweringOff && capture.isRecording { UserDefaults.standard.set(true, forKey: "resumeCaptureAfterRestart") }
+        UserDefaults.standard.set(false, forKey: Self.captureSessionKey)
+    }
+
+    /// Compresses older screens every ten minutes, faster while a backlog remains, and re-encodes
+    /// movies that held deleted screens. Interrupted leftovers are swept once per launch.
+    private func startArchiving() {
+        archiveTask?.cancel()
+        archiveTask = Task(priority: .utility) { [weak self] in
+            do { try await Task.sleep(for: .seconds(45)) } catch { return }
+            var swept = false
+            while !Task.isCancelled {
+                guard let self else { return }
+                let backlog = await self.archiveOnce()
+                if !swept {
+                    swept = true
+                    _ = try? await self.store.removeUnreferencedMedia()
+                }
+                var waited = 0.0
+                while waited < (backlog ? 5 : 600), !self.archiveRequested {
+                    do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                    waited += 5
+                }
+                self.archiveRequested = false
+            }
+        }
+    }
+
+    private func archiveOnce() async -> Bool {
+        let settings = self.settings
+        var moved: [String: FrameArchiver.ArchivedFrame] = [:]
+        var backlog = false
+        do {
+            moved = try await archiver.purgeDeletedFrames(quality: settings.archiveQuality)
+            if settings.archiveOlderFrames {
+                let report = try await archiver.archiveDue(quality: settings.archiveQuality)
+                moved.merge(report.frames) { _, latest in latest }
+                backlog = report.backlog
+                archiveStatus = report.failure
+            } else { archiveStatus = nil }
+        } catch is CancellationError { return false }
+        catch { archiveStatus = error.localizedDescription }
+        guard !moved.isEmpty else { return backlog }
+        // The library now points at movie frames; keep the open timeline in step with it.
+        func located(_ moment: Moment) -> Moment {
+            guard let frame = moved[moment.id] else { return moment }
+            var moment = moment
+            moment.imagePath = ""; moment.videoPath = frame.videoPath; moment.videoOffset = frame.offset
+            return moment
+        }
+        moments = moments.map(located)
+        if let selection, moved[selection.id] != nil { self.selection = located(selection) }
+        if let updated = try? await store.stats() { stats = updated }
+        return backlog
+    }
 }
 
 actor ImageImporter {

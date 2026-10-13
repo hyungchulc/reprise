@@ -39,6 +39,12 @@ swift test
 node script/check_mcp.mjs dist/Reprise.app/Contents/MacOS/RepriseMCP
 ```
 
+Three opt-in checks use real data without touching the vault: `REPRISE_TEST_SPEECH=1`
+transcribes a synthetic Korean/English meeting with the Mac's speech models,
+`REPRISE_ARCHIVE_SAMPLE=<captures folder>` compresses copies of the newest 150
+screens, and `REPRISE_LIBRARY_COPY=<library.sqlite>` migrates a copy made with
+`sqlite3 'file:…/library.sqlite?mode=ro' ".backup copy.sqlite"`.
+
 The package check runs before opening a vault, requesting permissions, or creating
 the app model. The stdio check uses a temporary disabled vault. Neither test records
 the screen/microphone nor calls an AI model. Native provider checks require the
