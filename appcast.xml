@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Reprise</title>
         <item>
+            <title>0.4.0-alpha.3</title>
+            <pubDate>Tue, 13 Oct 2026 21:29:28 +0200</pubDate>
+            <link>https://github.com/hyungchulc/reprise</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/hyungchulc/reprise/releases/tag/v0.4.0-alpha.3</sparkle:fullReleaseNotesLink>
+            <sparkle:version>20261013192836</sparkle:version>
+            <sparkle:shortVersionString>0.4.0-alpha.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/hyungchulc/reprise/releases/download/v0.4.0-alpha.3/Reprise-0.4.0-alpha.3-arm64.zip" length="7455724" type="application/octet-stream" sparkle:edSignature="g1mp3WVLe6ODX1NLzYA7Q6MilF1MBlroIL0tNFA3Xp80opZR/+LwR71pG+0slepM5zF56TrAMIQwdlE2Jc8JBA=="/>
+        </item>
+        <item>
             <title>0.4.0-alpha.2</title>
             <pubDate>Tue, 13 Oct 2026 21:21:47 +0200</pubDate>
             <link>https://github.com/hyungchulc/reprise</link>
@@ -30,6 +41,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: DTZTUJLE0u4c7Jvt3e4ZV2Ad9PRS6vs7eoAoUX2EY8QaFlpYsNNhGjXgBrjK25GCWfLNPurC2XIlgHRTaTxBBQ==
-length: 2297
+edSignature: oaZaxkwbUH0evErYw6ug7pipZjFA7EaPWF2JhVXO8UDl93s1PNe4mNEMGlgi+jwfjp6S/pVi9h1cYtLikpcSDw==
+length: 3230
 -->
