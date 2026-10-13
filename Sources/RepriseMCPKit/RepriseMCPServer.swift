@@ -201,7 +201,7 @@ public actor MemoryTools {
     private static func json(_ data: [String: Value]) throws -> CallTool.Result {
         let value = Value.object(data)
         let encoded = try JSONEncoder().encode(value)
-        return CallTool.Result(content: [.text(text: String(decoding: encoded, as: UTF8.self), annotations: nil, _meta: nil)], structuredContent: Optional(value))
+        return try CallTool.Result(content: [.text(text: String(decoding: encoded, as: UTF8.self), annotations: nil, _meta: nil)], structuredContent: data)
     }
 
     private static func preview(_ data: Data) throws -> Data {
