@@ -120,3 +120,12 @@ References: [Sparkle setup](https://sparkle-project.org/documentation/),
 [publishing](https://sparkle-project.org/documentation/publishing/),
 [manual nested-code signing](https://sparkle-project.org/documentation/sandboxing/#code-signing),
 [Apple certificate types](https://developer.apple.com/help/account/certificates/certificates-overview).
+
+## Verified Upgrade
+
+On 2026-10-13, the maintainer manually installed alpha.2 and then completed a
+Sparkle update to alpha.3. The running app changed from build `20261013192108` to
+`20261013192836` at the same Applications path. Sparkle logged successful EdDSA
+verification of both the feed and archive. Post-relaunch code-signature and package
+checks passed. The vault path, database identity and all pre-update record IDs were
+preserved. This validates that upgrade on one Mac, not all supported configurations.
