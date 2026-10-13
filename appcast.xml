@@ -1,0 +1,21 @@
+<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Reprise</title>
+        <item>
+            <title>0.4.0-alpha.1</title>
+            <pubDate>Tue, 13 Oct 2026 20:53:25 +0200</pubDate>
+            <link>https://github.com/hyungchulc/reprise</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/hyungchulc/reprise/releases/tag/v0.4.0-alpha.1</sparkle:fullReleaseNotesLink>
+            <sparkle:version>20261013185145</sparkle:version>
+            <sparkle:shortVersionString>0.4.0-alpha.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/hyungchulc/reprise/releases/download/v0.4.0-alpha.1/Reprise-0.4.0-alpha.1-arm64.zip" length="7455364" type="application/octet-stream" sparkle:edSignature="vStMHRD2xZeJl/x4rgPaY70nO9dx7RPJ1dOc4MOp9mOZ1Hkdg5X+5W/i51upVsHr7Grk+ltaqzHxi16/lIsjAQ=="></enclosure>
+        </item>
+    </channel>
+</rss><!-- sparkle-signatures:
+edSignature: ZajE4aoQHK22sQN4jyEuIkfwBZNenjCsufRQ1L5n77+HRQP1FJzdw4amL3MdSp3UwPCCQHm2Xg+Tat9np6GaDg==
+length: 1372
+-->
