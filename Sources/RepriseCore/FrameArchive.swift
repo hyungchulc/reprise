@@ -3,6 +3,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
+import VideoToolbox
 
 /// Older screen memories keep their text and thumbnail rows, while full-size pixels move into
 /// HEVC movies: one still per frame, frame i presented at i seconds. Screen content barely
@@ -58,9 +59,11 @@ public enum FrameArchive {
         }
     }
 
-    /// Re-encodes a movie without the frames of deleted memories. Returns the kept frame times
-    /// in their new order, so kept[i] is now frame i.
-    public static func rewrite(_ movie: URL, keeping times: [Double], to destination: URL, cipher: VaultCipher, quality: Double) async throws -> [Double] {
+    /// Re-encodes a movie without the frames of deleted memories, scaled down so its longer side is
+    /// at most `longSide` pixels when given. Returns the kept frame times in their new order, so
+    /// kept[i] is now frame i.
+    public static func rewrite(_ movie: URL, keeping times: [Double], to destination: URL, cipher: VaultCipher, quality: Double,
+                               longSide: Int? = nil) async throws -> [Double] {
         let source = try VaultAsset(url: movie, cipher: cipher)
         let asset = source.asset
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw Failure.frameUnavailable }
@@ -71,14 +74,17 @@ public enum FrameArchive {
         guard reader.canAdd(output) else { throw Failure.frameUnavailable }
         reader.add(output)
         guard reader.startReading() else { throw reader.error ?? Failure.frameUnavailable }
-        let session = try Session(destination: destination, cipher: cipher, width: Int(size.width) & ~1, height: Int(size.height) & ~1, quality: quality)
+        let scale = longSide.map { min(1, Double($0) / Double(max(size.width, size.height))) } ?? 1
+        let session = try Session(destination: destination, cipher: cipher, width: Int(size.width * scale) & ~1,
+                                  height: Int(size.height * scale) & ~1, quality: quality)
         let wanted = Set(times.map { Int($0.rounded()) })
         var kept: [Double] = []
         do {
             while let sample = output.copyNextSampleBuffer() {
                 try Task.checkCancellation()
                 let frame = Int(CMSampleBufferGetPresentationTimeStamp(sample).seconds.rounded())
-                guard wanted.contains(frame), let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
+                guard wanted.contains(frame), let decoded = CMSampleBufferGetImageBuffer(sample) else { continue }
+                guard let buffer = session.fitted(decoded) else { throw Failure.writeFailed("A frame could not be resized.") }
                 try await session.append(buffer, frame: kept.count)
                 kept.append(Double(frame))
             }
@@ -92,6 +98,26 @@ public enum FrameArchive {
             session.cancel()
             throw error
         }
+    }
+
+    /// The pixel size of an archive movie's frames.
+    public static func frameSize(of movie: URL, cipher: VaultCipher) async throws -> CGSize {
+        let source = try VaultAsset(url: movie, cipher: cipher)
+        guard let track = try await source.asset.loadTracks(withMediaType: .video).first else { throw Failure.frameUnavailable }
+        let size = try await track.load(.naturalSize)
+        withExtendedLifetime(source) {}
+        return size
+    }
+
+    /// A HEIC thumbnail at most 400 pixels on its longer side, as new captures write them.
+    static func heicThumbnail(_ image: Data) -> Data? {
+        guard let source = CGImageSourceCreateWithData(image as CFData, nil),
+              let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceThumbnailMaxPixelSize: 400, kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else { return nil }
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(output as CFMutableData, UTType.heic.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, thumbnail, [kCGImageDestinationLossyCompressionQuality: 0.6] as CFDictionary)
+        return CGImageDestinationFinalize(destination) ? output as Data : nil
     }
 
     /// A frame inside a movie, carried through URL-based image loading as `movie#t=offset`.
@@ -121,6 +147,7 @@ public enum FrameArchive {
         let output: SealedOutput
         let width: Int
         let height: Int
+        private var transfer: VTPixelTransferSession?
 
         init(destination: URL, cipher: VaultCipher, width: Int, height: Int, quality: Double) throws {
             guard width >= 2, height >= 2 else { throw Failure.writeFailed("Invalid frame size.") }
@@ -176,6 +203,23 @@ public enum FrameArchive {
             context.draw(image, in: CGRect(x: 0, y: height - image.height, width: image.width, height: image.height))
             return buffer
         }
+
+        /// A decoded frame at this movie's size: same-size frames pass through, larger ones are
+        /// averaged down so small text stays as legible as the size allows.
+        func fitted(_ buffer: CVPixelBuffer) -> CVPixelBuffer? {
+            guard CVPixelBufferGetWidth(buffer) != width || CVPixelBufferGetHeight(buffer) != height else { return buffer }
+            if transfer == nil {
+                VTPixelTransferSessionCreate(allocator: nil, pixelTransferSessionOut: &transfer)
+                if let transfer { VTSessionSetProperty(transfer, key: kVTPixelTransferPropertyKey_DownsamplingMode, value: kVTDownsamplingMode_Average) }
+            }
+            var scaled: CVPixelBuffer?
+            if let pool = adaptor.pixelBufferPool { CVPixelBufferPoolCreatePixelBuffer(nil, pool, &scaled) }
+            else { CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, nil, &scaled) }
+            guard let transfer, let scaled, VTPixelTransferSessionTransferImage(transfer, from: buffer, to: scaled) == noErr else { return nil }
+            return scaled
+        }
+
+        deinit { if let transfer { VTPixelTransferSessionInvalidate(transfer) } }
 
         func append(_ buffer: CVPixelBuffer, frame: Int) async throws {
             while !input.isReadyForMoreMediaData {
@@ -340,22 +384,81 @@ public actor FrameArchiver {
                 try await store.replaceArchive(movie, with: nil, moves: [])
                 continue
             }
-            let relative = FrameArchive.movieFolder(for: frames[0].timestamp) + "/\(UUID().uuidString).mp4"
-            let destination = root.appendingPathComponent(relative)
-            let kept = try await writeMovie(to: destination) { partial in
-                try await FrameArchive.rewrite(source, keeping: frames.compactMap(\.videoOffset), to: partial, cipher: cipher, quality: quality)
-            }
-            let share = (Self.fileSize(destination) ?? 0) / Int64(max(1, kept.count))
-            let position = Dictionary(kept.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
-            let moves = frames.compactMap { moment -> MomentStore.ArchiveMove? in
-                guard let offset = moment.videoOffset, let index = position[offset.rounded()] else { return nil }
-                return MomentStore.ArchiveMove(id: moment.id, from: offset, to: Double(index), byteCount: thumbnailBytes(moment) + share)
-            }
-            let updated = Set(try await store.replaceArchive(movie, with: relative, moves: moves))
-            if updated.isEmpty { try? FileManager.default.removeItem(at: destination) }
-            for move in moves where updated.contains(move.id) { moved[move.id] = ArchivedFrame(videoPath: relative, offset: move.to) }
+            moved.merge(try await reencode(movie, frames: frames, source: source, quality: quality)) { _, latest in latest }
         }
         return moved
+    }
+
+    /// Screens older than the cutoff are rarely opened frame by frame, so their movies are
+    /// re-encoded at half resolution, never below `minimumLongSide` pixels. Every frame keeps its
+    /// text, thumbnail and place in the timeline. A bounded number of movies is done per call.
+    public func compactMovies(before cutoff: Date, quality: Double, minimumLongSide: Int = 1280, limit: Int = 2) async throws -> Report {
+        var report = Report()
+        let movies = try await store.compactableArchives(before: cutoff, limit: limit + 1)
+        report.backlog = movies.count > limit
+        for movie in movies.prefix(limit) {
+            try Task.checkCancellation()
+            do {
+                let frames = try await store.frames(inArchive: movie)
+                let source = try await store.mediaURL(movie)
+                let size = try await FrameArchive.frameSize(of: source, cipher: cipher)
+                let longSide = Int(max(size.width, size.height))
+                let target = max(minimumLongSide, longSide / 2)
+                guard !frames.isEmpty, Double(target) < Double(longSide) * 0.9 else { try await store.markCompact(movie); continue }
+                let moved = try await reencode(movie, frames: frames, source: source, quality: quality, longSide: target)
+                report.frames.merge(moved) { _, latest in latest }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // A movie that cannot be reduced keeps its frames as they are and is not retried.
+                try await store.markCompact(movie)
+                report.failure = error.localizedDescription
+            }
+        }
+        return report
+    }
+
+    /// Encodes the kept frames of a movie into a new one, moves the memories over and deletes
+    /// the old movie once nothing references it.
+    private func reencode(_ movie: String, frames: [Moment], source: URL, quality: Double, longSide: Int? = nil) async throws -> [String: ArchivedFrame] {
+        let relative = FrameArchive.movieFolder(for: frames[0].timestamp) + "/\(UUID().uuidString).mp4"
+        let destination = root.appendingPathComponent(relative)
+        let kept = try await writeMovie(to: destination) { partial in
+            try await FrameArchive.rewrite(source, keeping: frames.compactMap(\.videoOffset), to: partial, cipher: cipher, quality: quality, longSide: longSide)
+        }
+        let share = (Self.fileSize(destination) ?? 0) / Int64(max(1, kept.count))
+        let position = Dictionary(kept.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let moves = frames.compactMap { moment -> MomentStore.ArchiveMove? in
+            guard let offset = moment.videoOffset, let index = position[offset.rounded()] else { return nil }
+            return MomentStore.ArchiveMove(id: moment.id, from: offset, to: Double(index), byteCount: thumbnailBytes(moment) + share)
+        }
+        let updated = Set(try await store.replaceArchive(movie, with: relative, moves: moves, compact: longSide != nil))
+        if updated.isEmpty { try? FileManager.default.removeItem(at: destination) }
+        var moved: [String: ArchivedFrame] = [:]
+        for move in moves where updated.contains(move.id) { moved[move.id] = ArchivedFrame(videoPath: relative, offset: move.to) }
+        return moved
+    }
+
+    /// Thumbnails that could not be decoded stay as they are for this session.
+    private var unconvertible = Set<String>()
+
+    /// Re-encodes JPEG thumbnails from versions before HEIC thumbnails, at about half the size.
+    /// Returns the new paths by memory ID and whether more remain.
+    public func upgradeThumbnails(limit: Int = 200) async throws -> (paths: [String: String], remaining: Bool) {
+        let legacy = try await store.legacyThumbnails(limit: limit + unconvertible.count + 1).filter { !unconvertible.contains($0.path) }
+        var paths: [String: String] = [:]
+        for item in legacy.prefix(limit) {
+            try Task.checkCancellation()
+            let old = root.appendingPathComponent(item.path)
+            let relative = String(item.path.dropLast(".jpg".count)) + ".heic"
+            let destination = root.appendingPathComponent(relative)
+            guard let heic = autoreleasepool(invoking: { (try? cipher.contents(of: old)).flatMap(FrameArchive.heicThumbnail) }),
+                  (try? cipher.write(heic, to: destination)) != nil else { unconvertible.insert(item.path); continue }
+            let delta = (Self.fileSize(destination) ?? 0) - (Self.fileSize(old) ?? 0)
+            if try await store.replaceThumbnail(id: item.id, from: item.path, to: relative, byteDelta: delta) { paths[item.id] = relative }
+            else { try? FileManager.default.removeItem(at: destination) }
+        }
+        return (paths, legacy.count > limit)
     }
 
     /// Writes beside the destination, proves the last frame decodes, then moves it into place.

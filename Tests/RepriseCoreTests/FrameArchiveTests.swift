@@ -68,6 +68,49 @@ final class FrameArchiveTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: captures.appendingPathComponent("s0-thumb.heic").path))
     }
 
+    func testOldMoviesShrinkToHalfResolutionAndJPEGThumbnailsBecomeHEIC() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-compact-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try MomentStore(root: root, keys: testKeys)
+        let captures = root.appendingPathComponent("captures")
+        try FileManager.default.createDirectory(at: captures, withIntermediateDirectories: true)
+        let old = Date().addingTimeInterval(-10 * 86_400)
+        for (index, color) in colors.enumerated() {
+            try write(color: color, width: 320, height: 200, to: captures.appendingPathComponent("s\(index).heic"))
+            try write(color: color, width: 40, height: 25, to: captures.appendingPathComponent("s\(index)-thumb.jpg"), type: .jpeg)
+            try await store.insert(Moment(id: "s\(index)", timestamp: old.addingTimeInterval(Double(index) * 3), appName: "Editor",
+                                          text: "old screen \(index)", imagePath: "captures/s\(index).heic",
+                                          thumbnailPath: "captures/s\(index)-thumb.jpg", byteCount: 10_000))
+        }
+        let archiver = FrameArchiver(store: store, root: root)
+        do { _ = try await archiver.archiveDue(quality: FrameArchive.balancedQuality, minimumBatch: 1) }
+        catch let error as FrameArchive.Failure where ProcessInfo.processInfo.environment["CI"] != nil {
+            throw XCTSkip("HEVC encoding is unavailable on this runner: \(error.localizedDescription)")
+        }
+        let full = try await store.moment(id: "s1")?.archivedFrame?.path
+        let original = try XCTUnwrap(full)
+
+        let report = try await archiver.compactMovies(before: Date(), quality: FrameArchive.balancedQuality, minimumLongSide: 64)
+        XCTAssertEqual(Set(report.frames.keys), ["s0", "s1", "s2"])
+        let reduced = try await store.moment(id: "s1")?.archivedFrame?.path
+        let movie = try XCTUnwrap(reduced)
+        XCTAssertNotEqual(movie, original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(original).path))
+        let size = try await FrameArchive.frameSize(of: root.appendingPathComponent(movie), cipher: testKeys.cipher)
+        XCTAssertEqual(size, CGSize(width: 160, height: 100))
+        for (index, color) in colors.enumerated() { try await assertFrame(of: "s\(index)", in: store, matches: color) }
+        let again = try await archiver.compactMovies(before: Date(), quality: FrameArchive.balancedQuality, minimumLongSide: 64)
+        XCTAssertTrue(again.frames.isEmpty, "A reduced movie is not reduced again")
+
+        let upgrade = try await archiver.upgradeThumbnails()
+        XCTAssertEqual(upgrade.paths.count, 3)
+        XCTAssertFalse(upgrade.remaining)
+        let thumbnail = try await store.moment(id: "s0")?.thumbnailPath
+        XCTAssertEqual(thumbnail, "captures/s0-thumb.heic")
+        XCTAssertTrue(VaultCipher.isSealed(fileAt: captures.appendingPathComponent("s0-thumb.heic")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captures.appendingPathComponent("s0-thumb.jpg").path))
+    }
+
     private func assertFrame(of id: String, in store: MomentStore, matches color: (Double, Double, Double), file: StaticString = #filePath, line: UInt = #line) async throws {
         let moment = try await store.moment(id: id)
         let frame = try XCTUnwrap(moment?.archivedFrame, file: file, line: line)
@@ -84,13 +127,13 @@ final class FrameArchiveTests: XCTestCase {
         }
     }
 
-    private func write(color: (Double, Double, Double), width: Int, height: Int, to url: URL) throws {
+    private func write(color: (Double, Double, Double), width: Int, height: Int, to url: URL, type: UTType = .heic) throws {
         let space = CGColorSpace(name: CGColorSpace.sRGB)!
         let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
                                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         context.setFillColor(CGColor(colorSpace: space, components: [color.0, color.1, color.2, 1])!)
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.heic.identifier as CFString, 1, nil))
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil))
         CGImageDestinationAddImage(destination, context.makeImage()!, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
         XCTAssertTrue(CGImageDestinationFinalize(destination))
     }

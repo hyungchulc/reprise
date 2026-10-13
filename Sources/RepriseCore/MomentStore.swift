@@ -125,6 +125,7 @@ public actor MomentStore {
                 CREATE TRIGGER IF NOT EXISTS moments_update \(Self.updateTrigger);
                 CREATE INDEX IF NOT EXISTS moments_stills ON moments(timestamp) WHERE kind='screen' AND video_path IS NULL AND bookmarked=0;
                 CREATE TABLE IF NOT EXISTS archive_purges (path TEXT PRIMARY KEY, requested REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS archive_compact (path TEXT PRIMARY KEY);
                 CREATE TABLE IF NOT EXISTS usage (
                     id TEXT PRIMARY KEY, timestamp REAL NOT NULL, provider TEXT NOT NULL,
                     model TEXT NOT NULL, input_tokens INTEGER, output_tokens INTEGER,
@@ -612,9 +613,10 @@ public actor MomentStore {
     }
 
     /// Moves frames into a re-encoded movie and settles the purge request. The old movie is
-    /// deleted once no memory references it. Returns the moved IDs.
+    /// deleted once no memory references it. A `compact` movie, or one that replaces a compact
+    /// movie, is marked so it is never reduced again. Returns the moved IDs.
     @discardableResult
-    public func replaceArchive(_ oldPath: String, with newPath: String?, moves: [ArchiveMove]) throws -> [String] {
+    public func replaceArchive(_ oldPath: String, with newPath: String?, moves: [ArchiveMove], compact: Bool = false) throws -> [String] {
         let replacement = try newPath.map { try normalizedMediaPath($0) }
         var moved: [String] = []
         var unreferenced = false
@@ -625,13 +627,58 @@ public actor MomentStore {
                             [.text(replacement), .real(move.to), .integer(max(0, move.byteCount)), .text(move.id), .text(oldPath), .real(move.from)])
                     if sqlite3_changes(database) > 0 { moved.append(move.id) }
                 }
+                try run("INSERT OR IGNORE INTO archive_compact(path) SELECT ? WHERE ? OR EXISTS (SELECT 1 FROM archive_compact WHERE path=?)",
+                        [.text(replacement), .integer(compact ? 1 : 0), .text(oldPath)])
             }
             try run("DELETE FROM archive_purges WHERE path=?", [.text(oldPath)])
             unreferenced = try !isReferenced(oldPath)
+            if unreferenced { try run("DELETE FROM archive_compact WHERE path=?", [.text(oldPath)]) }
         }
         for id in moved { forget(id) }
         if unreferenced { removeMedia(oldPath) }
         return moved
+    }
+
+    /// Movies whose screens are all older than the cutoff and not yet reduced, oldest first.
+    /// Movies waiting for a purge are left to the purge.
+    public func compactableArchives(before date: Date, limit: Int) throws -> [String] {
+        try run("DELETE FROM archive_compact WHERE path NOT IN (SELECT video_path FROM moments WHERE video_path IS NOT NULL)")
+        return try selectedIDs("""
+            SELECT video_path FROM moments WHERE kind='screen' AND image_path='' AND video_path IS NOT NULL
+            AND video_path NOT IN (SELECT path FROM archive_compact) AND video_path NOT IN (SELECT path FROM archive_purges)
+            GROUP BY video_path HAVING MAX(timestamp)<? ORDER BY MIN(timestamp) LIMIT ?
+            """, [.real(date.timeIntervalSince1970), .integer(Int64(max(1, min(limit, 64))))])
+    }
+
+    /// Records a movie that is already small enough, or that cannot be reduced, so it is not tried again.
+    public func markCompact(_ path: String) throws {
+        try run("INSERT OR IGNORE INTO archive_compact(path) VALUES(?)", [.text(path)])
+    }
+
+    /// JPEG thumbnails written before HEIC thumbnails, oldest first.
+    public func legacyThumbnails(limit: Int) throws -> [(id: String, path: String)] {
+        let statement = try prepare("SELECT id,thumbnail_path FROM moments WHERE thumbnail_path LIKE 'captures/%-thumb.jpg' ORDER BY timestamp,id LIMIT ?")
+        defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }
+        try bind([.integer(Int64(max(1, min(limit, 5_000))))], to: statement)
+        var rows: [(id: String, path: String)] = []
+        while try step(statement) { rows.append((string(statement, 0), string(statement, 1))) }
+        return rows
+    }
+
+    /// Points a memory at its re-encoded thumbnail, then deletes the old file once nothing uses it.
+    @discardableResult
+    public func replaceThumbnail(id: String, from oldPath: String, to newPath: String, byteDelta: Int64) throws -> Bool {
+        let replacement = try normalizedMediaPath(newPath)
+        var changed = false, unreferenced = false
+        try transaction {
+            try run("UPDATE moments SET thumbnail_path=?,byte_count=MAX(0,byte_count+?) WHERE id=? AND thumbnail_path=?",
+                    [.text(replacement), .integer(byteDelta), .text(id), .text(oldPath)])
+            changed = sqlite3_changes(database) > 0
+            unreferenced = try !isReferenced(oldPath)
+        }
+        if changed { forget(id) }
+        if unreferenced { removeMedia(oldPath) }
+        return changed
     }
 
     /// A vault file URL for readers that need one, such as AVFoundation. The path may not leave

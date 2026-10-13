@@ -107,6 +107,9 @@ public struct CaptureSettings: Codable, Equatable, Sendable {
     /// Older screenshots move into HEVC segments; recent ones stay as still images for instant viewing.
     public var archiveOlderFrames: Bool = true
     public var archiveQuality: Double = FrameArchive.balancedQuality
+    /// Movies whose screens are all older than `compactAfterDays` are re-encoded at half resolution.
+    public var compactOlderFrames: Bool = true
+    public var compactAfterDays: Int = 7
     public init() {}
 
     // Each key falls back on its own, so a setting added in a later version never resets the others.
@@ -125,6 +128,8 @@ public struct CaptureSettings: Codable, Equatable, Sendable {
         ocrLanguages = values.value(.ocrLanguages, default: defaults.ocrLanguages)
         archiveOlderFrames = values.value(.archiveOlderFrames, default: defaults.archiveOlderFrames)
         archiveQuality = values.value(.archiveQuality, default: defaults.archiveQuality)
+        compactOlderFrames = values.value(.compactOlderFrames, default: defaults.compactOlderFrames)
+        compactAfterDays = values.value(.compactAfterDays, default: defaults.compactAfterDays)
     }
 
     /// Zero keeps the display's backing pixels; explicit limits never upscale.

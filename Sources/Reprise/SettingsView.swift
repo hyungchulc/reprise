@@ -169,7 +169,10 @@ struct SettingsView: View {
             Picker("Compressed quality", selection: $model.settings.archiveQuality) {
                 Text("Smaller").tag(0.5); Text("Balanced").tag(FrameArchive.balancedQuality); Text("Sharper").tag(0.8)
             }.disabled(!model.settings.archiveOlderFrames)
-            Text("Screens older than 15 minutes are stored as HEVC video, about a sixth of the size. Search text, thumbnails and bookmarked screens are unchanged. Deleted screens are removed from the video too.")
+            Toggle("Halve the resolution of old screens", isOn: $model.settings.compactOlderFrames)
+            Stepper("After \(model.settings.compactAfterDays) days", value: $model.settings.compactAfterDays, in: 1...90)
+                .disabled(!model.settings.compactOlderFrames)
+            Text("Screens older than 15 minutes are stored as HEVC video, about a sixth of the size. After the chosen number of days, that video is re-encoded at half resolution, so small text gets harder to read while search stays the same. Search text, thumbnails and bookmarked screens are unchanged. Deleted screens are removed from the video too.")
                 .repriseFont(.caption).foregroundStyle(.secondary)
             if let status = model.archiveStatus { Text(status).repriseFont(.caption).foregroundStyle(.orange) }
         }

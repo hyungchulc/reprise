@@ -7,8 +7,9 @@ transcripts, search conversations and reported usage in
 `~/Library/Application Support/Reprise`, unless a custom `REPRISE_DATA_DIR` is used.
 Updating the app does not change that path. The folder is private to your macOS
 account, and since 0.6 its contents are encrypted (below). Screens older than 15
-minutes are kept as frames of HEVC movies; deleting such a screen re-encodes its movie
-without it.
+minutes are kept as frames of HEVC movies, re-encoded at half resolution after 7 days
+by default; deleting such a screen re-encodes its movie without it. The menu bar is left
+out of screen text and of the check for an unchanged screen, but stays in the image.
 
 ## Encryption
 

@@ -124,7 +124,8 @@ final class CaptureEngine: ObservableObject {
                   foregroundContext() == before, privacyReason(before, settings: settings) == nil else { skip("Skipped changed context"); return }
             let contextKey = "\(display.displayID)|\(before.pid)|\(before.title)"
             prepared = try await processor.prepare(image: image, root: root, cipher: store.cipher, settings: settings,
-                previousFingerprint: settings.deduplicate && contextKey == lastContext ? lastFingerprint : nil)
+                previousFingerprint: settings.deduplicate && contextKey == lastContext ? lastFingerprint : nil,
+                ignoringTopRows: menuBarRows(display: display, window: window, image: image, pointHeight: filter.contentRect.height))
             guard let result = prepared else { skip("Recording, unchanged screen"); return }
             guard token == generation, !Task.isCancelled, pauseReason(settings: settings) == nil,
                   foregroundContext() == before, privacyReason(before, settings: settings) == nil else {
@@ -157,6 +158,16 @@ final class CaptureEngine: ObservableObject {
     }
 
     private func skip(_ reason: String) { skippedCount += 1; status = reason }
+
+    /// Image rows under the display's menu bar, or none when a full-screen window covers the top edge.
+    private func menuBarRows(display: SCDisplay, window: SCWindow?, image: CGImage, pointHeight: CGFloat) -> Int {
+        if let window, window.frame.minY <= display.frame.minY + 0.5 { return 0 }
+        guard pointHeight > 0, let screen = NSScreen.screens.first(where: {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.displayID
+        }) else { return 0 }
+        let menuBar = max(0, screen.frame.maxY - screen.visibleFrame.maxY)
+        return Int((menuBar / pointHeight * CGFloat(image.height)).rounded(.up))
+    }
 
     private func pauseReason(settings: CaptureSettings) -> String? {
         if sleeping { return "Paused while asleep or locked" }

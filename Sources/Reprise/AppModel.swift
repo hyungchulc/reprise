@@ -652,7 +652,8 @@ final class AppModel: ObservableObject {
             while !Task.isCancelled {
                 guard let self else { return }
                 let unsealed = await self.sealLegacyMedia()
-                let backlog = await self.archiveOnce() || unsealed
+                let thumbnails = await self.upgradeThumbnails()
+                let backlog = await self.archiveOnce() || unsealed || thumbnails
                 if !swept {
                     swept = true
                     _ = try? await self.store.removeUnreferencedMedia()
@@ -678,6 +679,23 @@ final class AppModel: ObservableObject {
         return progress.remaining
     }
 
+    /// Re-encodes one batch of old JPEG thumbnails as HEIC and keeps the open timeline pointing at
+    /// them. Returns whether more remain.
+    private func upgradeThumbnails() async -> Bool {
+        guard let result = try? await archiver.upgradeThumbnails() else { return false }
+        if !result.paths.isEmpty {
+            func updated(_ moment: Moment) -> Moment {
+                guard let path = result.paths[moment.id] else { return moment }
+                var moment = moment
+                moment.thumbnailPath = path
+                return moment
+            }
+            moments = moments.map(updated)
+            if let selection { self.selection = updated(selection) }
+        }
+        return result.remaining
+    }
+
     private func archiveOnce() async -> Bool {
         let settings = self.settings
         var moved: [String: FrameArchiver.ArchivedFrame] = [:]
@@ -690,6 +708,13 @@ final class AppModel: ObservableObject {
                 backlog = report.backlog
                 archiveStatus = report.failure
             } else { archiveStatus = nil }
+            if settings.compactOlderFrames {
+                let cutoff = Date().addingTimeInterval(-Double(max(1, settings.compactAfterDays)) * 86_400)
+                let report = try await archiver.compactMovies(before: cutoff, quality: settings.archiveQuality)
+                moved.merge(report.frames) { _, latest in latest }
+                backlog = backlog || report.backlog
+                if let failure = report.failure { archiveStatus = failure }
+            }
         } catch is CancellationError { return false }
         catch { archiveStatus = error.localizedDescription }
         guard !moved.isEmpty else { return backlog }

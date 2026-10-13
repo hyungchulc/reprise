@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0-alpha.1
+
+- The menu bar no longer makes a screen count as new. Its clock and live status items,
+  such as CPU or network meters, changed in most captures. On one real hour, a fifth of
+  saved screens differed only there or not visibly at all, and each one cost OCR and
+  storage. The menu bar stays in the saved image but is left out of screen text, unless a
+  full-screen app covers it.
+- Compressed screens older than 7 days are re-encoded once at half resolution, never
+  below 1280 pixels on the longer side. That uses a quarter of the pixels, so a month of
+  history takes far less space; search text, thumbnails and the timeline are unchanged,
+  but small text in old screenshots gets harder to read. Choose the age or turn it off in
+  **Settings > Storage > Compression**.
+- JPEG thumbnails from early versions are re-encoded as HEIC in the background, about
+  half their size.
+
 ## 0.6.0-alpha.2
 
 - Recent searches saved before encryption, including their saved answers, are sealed

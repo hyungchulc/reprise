@@ -126,9 +126,11 @@ Reprise does not bundle any recorded memories or credentials in its releases.
 
 Capture defaults to native Retina resolution, 85% image quality and a 3-second
 interval. Settings expose smaller resolutions, intervals, retention and storage
-limits. Unchanged-screen deduplication, HEIC with JPEG fallback, separate 400px
-thumbnails, HEVC compression of screens older than 15 minutes (roughly 4–7 times
-smaller in our samples), bounded capture/OCR work, and 96 MB preview / 8 MB thumbnail caches
+limits. Unchanged-screen deduplication that ignores the menu bar's clock and live status
+items, HEIC with JPEG fallback, separate 400px HEIC thumbnails, HEVC compression of
+screens older than 15 minutes (roughly 4–7 times smaller in our samples), re-encoding at
+half resolution after 7 days (adjustable or off in Settings), bounded capture/OCR work,
+and 96 MB preview / 8 MB thumbnail caches
 limit background work. These are implementation choices, not measured guarantees
 against another app. CPU and process memory are visible; GPU usage is not measured.
 

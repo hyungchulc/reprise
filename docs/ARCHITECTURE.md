@@ -17,7 +17,12 @@ images and thumbnails are separate. After 15 minutes, `FrameArchiver` moves full
 stills of one pixel size into HEVC movies (frame i at i seconds, keyframes every 30
 frames) and points each row at its movie and frame time in one transaction; a movie is
 verified before any still is deleted. Deleting a compressed screen queues its movie for
-re-encoding without that frame. The SQLite actor owns prepared statements, WAL access,
+re-encoding without that frame. Movies whose screens are all older than the compaction age
+(7 days by default) are re-encoded once at half resolution, never below 1280 pixels on the
+longer side; `archive_compact` records reduced movies, and a purge rewrite keeps the mark.
+Deduplication hashes the pixels below the menu bar, and OCR skips the same band, unless a
+full-screen window covers it. JPEG thumbnails from early versions are re-encoded as HEIC
+in the background. The SQLite actor owns prepared statements, WAL access,
 FTS5 and bounded caches. Media paths are vault-relative and validated before file
 operations. Database migrations are additive, and settings decode key by key.
 

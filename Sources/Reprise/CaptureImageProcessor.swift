@@ -24,16 +24,23 @@ struct PreparedCapture: Sendable {
 
 // Serial actor bounds image encoding and Vision to the single caller-owned frame.
 actor CaptureImageProcessor {
-    func prepare(image: CGImage, root: URL, cipher: VaultCipher, settings: CaptureSettings, previousFingerprint: String?) throws -> PreparedCapture? {
+    /// `ignoringTopRows` covers the menu bar. Its clock and live status items change on their own, so
+    /// they neither make a screen new nor enter the searchable text; the saved image still shows them.
+    func prepare(image: CGImage, root: URL, cipher: VaultCipher, settings: CaptureSettings, previousFingerprint: String?,
+                 ignoringTopRows: Int = 0) throws -> PreparedCapture? {
         try autoreleasepool {
             let timestamp = Date()
             guard let pixels = image.dataProvider?.data else { throw CaptureFailure("Unable to read captured image.") }
-            let fingerprint = SHA256.hash(data: pixels as Data).map { String(format: "%02x", $0) }.joined()
+            let band = min(max(0, ignoringTopRows), image.height - 1)
+            let data = pixels as Data
+            let fingerprint = SHA256.hash(data: data[(data.startIndex + min(data.count, band * image.bytesPerRow))...])
+                .map { String(format: "%02x", $0) }.joined()
             if fingerprint == previousFingerprint { return nil }
             try Task.checkCancellation()
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
             request.usesLanguageCorrection = true
+            request.regionOfInterest = CGRect(x: 0, y: 0, width: 1, height: 1 - Double(band) / Double(image.height))
             var ocrWarning: String?
             do {
                 let supported = try request.supportedRecognitionLanguages()
