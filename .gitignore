@@ -1,0 +1,17 @@
+.build/
+dist/
+state/
+logs/
+.DS_Store
+*.xcuserstate
+research/rea-evidence.json
+outputs/*.png
+.env
+.env.*
+*.p12
+*.p8
+*.pem
+*.key
+*.sqlite*
+mcp-access.json
+*.reprise-backup-*

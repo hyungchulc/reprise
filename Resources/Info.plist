@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>Reprise</string>
+<key>CFBundleIdentifier</key><string>local.aria.reprise</string>
+<key>CFBundleName</key><string>Reprise</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>0.4.0-alpha.1</string>
+<key>CFBundleVersion</key><string>2</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>NSPrincipalClass</key><string>NSApplication</string>
+<key>NSMicrophoneUsageDescription</key><string>Record audio only when you start a meeting recording.</string>
+<key>NSSpeechRecognitionUsageDescription</key><string>Transcribe recorded meetings on this Mac when supported.</string>
+<key>NSScreenCaptureUsageDescription</key><string>Save searchable screen memories after you start recording.</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>SUFeedURL</key><string>https://raw.githubusercontent.com/hyungchulc/reprise/main/appcast.xml</string>
+<key>SUPublicEDKey</key><string>3DLK4qjGUSIe6OZBFageXbJpJqIiNXDBz9Q7ivkRZ/U=</string>
+<key>SUEnableAutomaticChecks</key><false/>
+<key>SUAutomaticallyUpdate</key><false/>
+<key>SUEnableSystemProfiling</key><false/>
+<key>SURequireSignedFeed</key><true/>
+<key>SUVerifyUpdateBeforeExtraction</key><true/>
+</dict></plist>
