@@ -9,9 +9,17 @@ struct MemoryAudioPanel: View {
     @Binding var transcriptExpanded: Bool
     let transcriptHeight: CGFloat
     var framed = true
+    var summary: MeetingSummary?
+    var summarizing = false
+    var summaryError: String?
+    var providerName = ""
+    var onSummarize: () -> Void = {}
     var onTranscribe: () -> Void = {}
     var onClose: (() -> Void)?
     @State private var contentHeight: CGFloat = 44
+    @State private var summaryHeight: CGFloat = 44
+    @State private var page: Page = .summary
+    private enum Page { case summary, transcript }
 
     private var segments: [TranscriptSegment] { (moment.transcriptSegments ?? []).filter(\.isValid) }
     private var activeSegment: Int? {
@@ -54,6 +62,19 @@ struct MemoryAudioPanel: View {
             }.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
 
             if transcriptExpanded {
+                Picker("View", selection: $page) {
+                    Text("Summary").tag(Page.summary)
+                    Text("Transcript").tag(Page.transcript)
+                }.pickerStyle(.segmented).labelsHidden().frame(width: 240).padding(.bottom, 6)
+            }
+            if transcriptExpanded && page == .summary {
+                ScrollView { summaryContent.background(GeometryReader { proxy in Color.clear.preference(key: SummaryHeightKey.self, value: proxy.size.height) }) }
+                    .frame(height: min(transcriptHeight, max(44, summaryHeight))).scrollBounceBehavior(.basedOnSize)
+                    .onPreferenceChange(SummaryHeightKey.self) { height in
+                        if abs(height - summaryHeight) > 1 { summaryHeight = height }
+                    }
+                Divider().padding(.horizontal, 16)
+            } else if transcriptExpanded {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) {
@@ -107,6 +128,61 @@ struct MemoryAudioPanel: View {
                 Text(error).repriseFont(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.bottom, 10)
             }
         }.buttonStyle(.plain)
+        .onAppear { page = summary != nil || summarizing || moment.text.isEmpty == false ? .summary : .transcript }
+        .onChange(of: moment.id) { _, _ in page = .summary }
+        .onChange(of: recorder.transcribingMomentID) { _, id in if id == moment.id { page = .transcript } }
+    }
+
+    @ViewBuilder private var summaryContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if summarizing {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Summarizing with \(providerName)...").foregroundStyle(.secondary)
+                }
+            } else if let summary {
+                Text(summary.overview).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                list("Key points", summary.keyPoints, icon: "circle.fill", size: 5)
+                list("Decisions", summary.decisions, icon: "checkmark.seal", size: 11)
+                list("Action items", summary.actionItems, icon: "square", size: 11)
+                if !summary.matches(moment) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                        Text("The transcript changed after this summary.").foregroundStyle(.secondary)
+                        Button("Update", action: onSummarize).buttonStyle(.link)
+                    }.repriseFont(.caption)
+                }
+                HStack(spacing: 12) {
+                    Text("\(AIProviderKind(rawValue: summary.provider)?.displayName ?? summary.provider), \(summary.created.formatted(date: .abbreviated, time: .shortened))")
+                        .repriseFont(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(summary.plainText, forType: .string)
+                    } label: { Image(systemName: "doc.on.doc") }.help("Copy summary").accessibilityLabel("Copy summary")
+                    Button(action: onSummarize) { Image(systemName: "arrow.clockwise") }.help("Summarize again").accessibilityLabel("Summarize again")
+                }
+            } else {
+                if let summaryError { Text(summaryError).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                else if moment.text.isEmpty { Text("Transcribe this recording, then it can be summarized.").foregroundStyle(.secondary) }
+                Button(summaryError == nil ? "Summarize with \(providerName)" : "Try Again", systemImage: "sparkles", action: onSummarize)
+                    .buttonStyle(.bordered).disabled(moment.text.isEmpty || recorder.transcribingMomentID == moment.id)
+            }
+        }.repriseFont().frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.vertical, 8)
+    }
+
+    @ViewBuilder private func list(_ title: String, _ items: [String], icon: String, size: CGFloat) -> some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title).repriseFont(.heading)
+                ForEach(items.indices, id: \.self) { index in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: icon).font(.system(size: size)).foregroundStyle(Color.accentColor)
+                        Text(items[index]).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
     }
 
     static func timestamp(_ seconds: Double) -> String {
@@ -115,6 +191,11 @@ struct MemoryAudioPanel: View {
         if value >= 3_600 { return String(format: "%d:%02d:%02d", value / 3_600, value / 60 % 60, value % 60) }
         return String(format: "%d:%02d", value / 60, value % 60)
     }
+}
+
+private struct SummaryHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 44
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 private struct TranscriptHeightKey: PreferenceKey {

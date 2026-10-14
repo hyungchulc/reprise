@@ -27,7 +27,7 @@ actor CaptureImageProcessor {
     /// `ignoringTopRows` covers the menu bar. Its clock and live status items change on their own, so
     /// they neither make a screen new nor enter the searchable text; the saved image still shows them.
     func prepare(image: CGImage, root: URL, cipher: VaultCipher, settings: CaptureSettings, previousFingerprint: String?,
-                 ignoringTopRows: Int = 0) throws -> PreparedCapture? {
+                 ignoringTopRows: Int = 0, textScaleLimit: Int = 2_400) throws -> PreparedCapture? {
         try autoreleasepool {
             let timestamp = Date()
             guard let pixels = image.dataProvider?.data else { throw CaptureFailure("Unable to read captured image.") }
@@ -46,7 +46,7 @@ actor CaptureImageProcessor {
                 let supported = try request.supportedRecognitionLanguages()
                 request.recognitionLanguages = settings.ocrLanguages.filter { supported.contains($0) }
                 if request.recognitionLanguages.isEmpty { request.recognitionLanguages = ["en-US"] }
-                let ocrImage = resized(image, maxDimension: 2400) ?? image
+                let ocrImage = resized(image, maxDimension: max(1_280, textScaleLimit)) ?? image
                 try VNImageRequestHandler(cgImage: ocrImage).perform([request])
             } catch {
                 ocrWarning = "Image saved, OCR unavailable: \(error.localizedDescription)"

@@ -27,15 +27,27 @@ public actor MomentStore {
     private var cache: [String: Moment] = [:]
     private var cacheOrder: [String] = []
     private var cacheDataVersion: Int64?
-    private static let columns = "id,timestamp,app_name,bundle_id,window_title,text,image_path,thumbnail_path,video_path,video_offset,bookmarked,kind,byte_count,audio_duration,transcript_segments,transcription_note"
+    private static let columns = "id,timestamp,app_name,bundle_id,window_title,text,image_path,thumbnail_path,video_path,video_offset,bookmarked,kind,byte_count,audio_duration,transcript_segments,transcription_note,url"
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
     /// Full-text rows change only with the indexed columns, not with bookmarks or archive moves.
     private static let updateTrigger = """
-        AFTER UPDATE OF app_name,window_title,text ON moments BEGIN
-            INSERT INTO moments_fts(moments_fts,rowid,app_name,window_title,text)
-            VALUES('delete',old.rowid,old.app_name,old.window_title,old.text);
-            INSERT INTO moments_fts(rowid,app_name,window_title,text)
-            VALUES(new.rowid,new.app_name,new.window_title,new.text);
+        AFTER UPDATE OF app_name,window_title,text,url ON moments BEGIN
+            INSERT INTO moments_fts(moments_fts,rowid,app_name,window_title,text,url)
+            VALUES('delete',old.rowid,old.app_name,old.window_title,old.text,old.url);
+            INSERT INTO moments_fts(rowid,app_name,window_title,text,url)
+            VALUES(new.rowid,new.app_name,new.window_title,new.text,new.url);
+        END
+        """
+    private static let insertTrigger = """
+        AFTER INSERT ON moments BEGIN
+            INSERT INTO moments_fts(rowid,app_name,window_title,text,url)
+            VALUES(new.rowid,new.app_name,new.window_title,new.text,new.url);
+        END
+        """
+    private static let deleteTrigger = """
+        AFTER DELETE ON moments BEGIN
+            INSERT INTO moments_fts(moments_fts,rowid,app_name,window_title,text,url)
+            VALUES('delete',old.rowid,old.app_name,old.window_title,old.text,old.url);
         END
         """
 
@@ -103,7 +115,7 @@ public actor MomentStore {
                     bundle_id TEXT NOT NULL, window_title TEXT NOT NULL, text TEXT NOT NULL,
                     image_path TEXT NOT NULL, thumbnail_path TEXT NOT NULL, video_path TEXT,
                     video_offset REAL, bookmarked INTEGER NOT NULL, kind TEXT NOT NULL,
-                    byte_count INTEGER NOT NULL CHECK(byte_count >= 0)
+                    byte_count INTEGER NOT NULL CHECK(byte_count >= 0), url TEXT
                 );
                 CREATE INDEX IF NOT EXISTS moments_time ON moments(timestamp DESC, id DESC);
                 CREATE INDEX IF NOT EXISTS moments_app_time ON moments(app_name, timestamp DESC);
@@ -112,20 +124,18 @@ public actor MomentStore {
                 CREATE INDEX IF NOT EXISTS moments_thumbnail ON moments(thumbnail_path);
                 CREATE INDEX IF NOT EXISTS moments_video ON moments(video_path);
                 CREATE VIRTUAL TABLE IF NOT EXISTS moments_fts USING fts5(
-                    app_name, window_title, text, content='moments', content_rowid='rowid'
+                    app_name, window_title, text, url, content='moments', content_rowid='rowid'
                 );
-                CREATE TRIGGER IF NOT EXISTS moments_insert AFTER INSERT ON moments BEGIN
-                    INSERT INTO moments_fts(rowid,app_name,window_title,text)
-                    VALUES(new.rowid,new.app_name,new.window_title,new.text);
-                END;
-                CREATE TRIGGER IF NOT EXISTS moments_delete AFTER DELETE ON moments BEGIN
-                    INSERT INTO moments_fts(moments_fts,rowid,app_name,window_title,text)
-                    VALUES('delete',old.rowid,old.app_name,old.window_title,old.text);
-                END;
+                CREATE TRIGGER IF NOT EXISTS moments_insert \(Self.insertTrigger);
+                CREATE TRIGGER IF NOT EXISTS moments_delete \(Self.deleteTrigger);
                 CREATE TRIGGER IF NOT EXISTS moments_update \(Self.updateTrigger);
                 CREATE INDEX IF NOT EXISTS moments_stills ON moments(timestamp) WHERE kind='screen' AND video_path IS NULL AND bookmarked=0;
                 CREATE TABLE IF NOT EXISTS archive_purges (path TEXT PRIMARY KEY, requested REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS archive_compact (path TEXT PRIMARY KEY);
+                CREATE TABLE IF NOT EXISTS meeting_summaries (
+                    moment_id TEXT PRIMARY KEY REFERENCES moments(id) ON DELETE CASCADE,
+                    created REAL NOT NULL, summary TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS usage (
                     id TEXT PRIMARY KEY, timestamp REAL NOT NULL, provider TEXT NOT NULL,
                     model TEXT NOT NULL, input_tokens INTEGER, output_tokens INTEGER,
@@ -147,6 +157,32 @@ public actor MomentStore {
             if !columns.contains("audio_duration") { try Self.execute(connection, "ALTER TABLE moments ADD COLUMN audio_duration REAL") }
             if !columns.contains("transcript_segments") { try Self.execute(connection, "ALTER TABLE moments ADD COLUMN transcript_segments TEXT") }
             if !columns.contains("transcription_note") { try Self.execute(connection, "ALTER TABLE moments ADD COLUMN transcription_note TEXT") }
+            if !columns.contains("url") { try Self.execute(connection, "ALTER TABLE moments ADD COLUMN url TEXT") }
+            // Browser addresses joined the full-text index in 0.8; older indexes are rebuilt once.
+            var index: OpaquePointer?
+            guard sqlite3_prepare_v2(connection, "PRAGMA table_info(moments_fts)", -1, &index, nil) == SQLITE_OK else {
+                throw MomentStoreError.database(String(cString: sqlite3_errmsg(connection)))
+            }
+            var indexed = Set<String>()
+            while sqlite3_step(index) == SQLITE_ROW {
+                if let name = sqlite3_column_text(index, 1) { indexed.insert(String(cString: name)) }
+            }
+            sqlite3_finalize(index)
+            if !indexed.contains("url") {
+                try Self.execute(connection, "BEGIN IMMEDIATE")
+                do {
+                    try Self.execute(connection, """
+                        DROP TRIGGER IF EXISTS moments_insert; DROP TRIGGER IF EXISTS moments_delete; DROP TRIGGER IF EXISTS moments_update;
+                        DROP TABLE IF EXISTS moments_fts;
+                        CREATE VIRTUAL TABLE moments_fts USING fts5(app_name, window_title, text, url, content='moments', content_rowid='rowid');
+                        INSERT INTO moments_fts(moments_fts) VALUES('rebuild');
+                        CREATE TRIGGER moments_insert \(Self.insertTrigger);
+                        CREATE TRIGGER moments_delete \(Self.deleteTrigger);
+                        CREATE TRIGGER moments_update \(Self.updateTrigger);
+                        COMMIT
+                        """)
+                } catch { try? Self.execute(connection, "ROLLBACK"); throw error }
+            }
             // Earlier libraries re-indexed text on every update, including bookmark and archive changes.
             var trigger: OpaquePointer?
             guard sqlite3_prepare_v2(connection, "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='moments_update'", -1, &trigger, nil) == SQLITE_OK else {
@@ -173,6 +209,19 @@ public actor MomentStore {
         self.rootDescriptor = descriptor
         self.cipher = keys.cipher
         self.convertedFromPlaintext = converting
+    }
+
+    /// Whether `keys` open the library at `root`. Reads only; a wrong key changes nothing.
+    public static func canUnlock(root: URL, keys: VaultKeys) -> Bool {
+        let path = root.appendingPathComponent("library.sqlite").path
+        var connection: OpaquePointer?
+        guard sqlite3_open_v2(path, &connection, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_NOFOLLOW, nil) == SQLITE_OK,
+              let connection else {
+            if let connection { sqlite3_close(connection) }
+            return false
+        }
+        defer { sqlite3_close(connection) }
+        return (try? unlock(connection, keys: keys)) != nil
     }
 
     /// Whether `root` holds a library that only its key can open.
@@ -297,13 +346,14 @@ public actor MomentStore {
         moment.thumbnailPath = try normalizedMediaPath(moment.thumbnailPath)
         moment.videoPath = try moment.videoPath.map { try normalizedMediaPath($0) }
         let statement = try prepare("""
-            INSERT INTO moments (\(Self.columns)) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO moments (\(Self.columns)) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET timestamp=excluded.timestamp,app_name=excluded.app_name,
                 bundle_id=excluded.bundle_id,window_title=excluded.window_title,text=excluded.text,
                 image_path=excluded.image_path,thumbnail_path=excluded.thumbnail_path,
                 video_path=excluded.video_path,video_offset=excluded.video_offset,
                 bookmarked=excluded.bookmarked,kind=excluded.kind,byte_count=excluded.byte_count,
-                audio_duration=excluded.audio_duration,transcript_segments=excluded.transcript_segments,transcription_note=excluded.transcription_note
+                audio_duration=excluded.audio_duration,transcript_segments=excluded.transcript_segments,transcription_note=excluded.transcription_note,
+                url=excluded.url
             """
         )
         defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }
@@ -314,7 +364,8 @@ public actor MomentStore {
                   .text(moment.bundleID), .text(moment.windowTitle), .text(moment.text),
                   .text(moment.imagePath), .text(moment.thumbnailPath), value(moment.videoPath),
                   value(moment.videoOffset), .integer(moment.isBookmarked ? 1 : 0),
-                  .text(moment.kind), .integer(max(0, moment.byteCount)), value(moment.audioDuration), value(segments), value(moment.transcriptionNote)], to: statement)
+                  .text(moment.kind), .integer(max(0, moment.byteCount)), value(moment.audioDuration), value(segments), value(moment.transcriptionNote),
+                  value(moment.url.flatMap(BrowserAddress.sanitized))], to: statement)
         try finish(statement)
         moment.byteCount = max(0, moment.byteCount)
         remember(moment)
@@ -328,6 +379,27 @@ public actor MomentStore {
         try bind([.text(text), .text(encoded), value(note), .text(id)], to: statement)
         try finish(statement)
         forget(id)
+    }
+
+    /// A meeting's saved summary. The library database is encrypted, so the JSON is stored as is.
+    public func summary(for id: String) throws -> MeetingSummary? {
+        let statement = try prepare("SELECT summary FROM meeting_summaries WHERE moment_id=?")
+        defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }
+        try bind([.text(id)], to: statement)
+        guard try step(statement) else { return nil }
+        return try? JSONDecoder().decode(MeetingSummary.self, from: Data(string(statement, 0).utf8))
+    }
+
+    /// UPDATE-style: a summary is saved only while its recording still exists.
+    public func saveSummary(_ summary: MeetingSummary, for id: String) throws {
+        let encoded = String(decoding: try JSONEncoder().encode(summary), as: UTF8.self)
+        let statement = try prepare("""
+            INSERT INTO meeting_summaries(moment_id,created,summary) SELECT id,?,? FROM moments WHERE id=? AND kind='meeting'
+            ON CONFLICT(moment_id) DO UPDATE SET created=excluded.created,summary=excluded.summary
+            """)
+        defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }
+        try bind([.real(summary.created.timeIntervalSince1970), .text(encoded), .text(id)], to: statement)
+        try finish(statement)
     }
 
     public func query(_ query: MomentQuery) throws -> [Moment] {
@@ -352,7 +424,7 @@ public actor MomentStore {
         let columns = Self.columns.split(separator: ",").map { "m.\($0)" }.joined(separator: ",")
         let statement = try prepare("""
             SELECT \(columns) FROM moments m JOIN moments_fts ON moments_fts.rowid=m.rowid
-            \(predicate) ORDER BY bm25(moments_fts,2.0,4.0,1.0),m.timestamp DESC,m.id DESC LIMIT ? OFFSET ?
+            \(predicate) ORDER BY bm25(moments_fts,2.0,4.0,1.0,2.0),m.timestamp DESC,m.id DESC LIMIT ? OFFSET ?
             """)
         defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }
         try bind(values + [.integer(Int64(max(0, min(query.limit, 1_000)))), .integer(Int64(max(0, query.offset)))], to: statement)
@@ -919,6 +991,13 @@ public actor MomentStore {
         catch { try? Self.execute(database, "ROLLBACK"); throw error }
     }
 
+    /// Korean attaches particles to words (회의에서, 회의를), so a word also matches the longer
+    /// words it starts; very short Latin words stay exact so they do not match half the index.
+    static func matchTerm(_ token: String) -> String {
+        let ascii = token.unicodeScalars.allSatisfy(\.isASCII)
+        return token.count >= (ascii ? 4 : 2) ? "\"\(token)\"*" : "\"\(token)\""
+    }
+
     private static func tokens(_ text: String) -> [String] {
         text.components(separatedBy: CharacterSet.alphanumerics.union(.nonBaseCharacters).inverted).filter { !$0.isEmpty }
     }
@@ -930,7 +1009,7 @@ public actor MomentStore {
         let tokens = Self.tokens(query.text)
         if !tokens.isEmpty {
             conditions.append(textPredicate ?? "\(prefix)rowid IN (SELECT rowid FROM moments_fts WHERE moments_fts MATCH ?)")
-            values.append(.text(tokens.map { "\"\($0)\"" }.joined(separator: " AND ")))
+            values.append(.text(tokens.map(Self.matchTerm).joined(separator: " AND ")))
         } else if !query.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             conditions.append("0")
         }
@@ -956,7 +1035,8 @@ public actor MomentStore {
             isBookmarked: sqlite3_column_int(statement, 10) != 0, kind: string(statement, 11), byteCount: sqlite3_column_int64(statement, 12),
             audioDuration: sqlite3_column_type(statement, 13) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 13),
             transcriptSegments: (try? JSONDecoder().decode([TranscriptSegment].self, from: Data(string(statement, 14).utf8)))?.filter(\.isValid),
-            transcriptionNote: sqlite3_column_type(statement, 15) == SQLITE_NULL ? nil : string(statement, 15))
+            transcriptionNote: sqlite3_column_type(statement, 15) == SQLITE_NULL ? nil : string(statement, 15),
+            url: sqlite3_column_type(statement, 16) == SQLITE_NULL ? nil : string(statement, 16))
     }
 
     private func remember(_ moment: Moment) {

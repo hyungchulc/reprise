@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.8.0-alpha.1
+
+- More AI providers. **Gemini** runs through Google's Antigravity CLI (`agy`), which
+  replaced the personal Gemini CLI; **Cursor** through `cursor-agent`; **OpenCode** with
+  its free models and no account, zero-retention models first; **Apple Intelligence**
+  with Apple's on-device model on macOS 26; and **Ollama** with models on this Mac,
+  downloadable from Settings. Every CLI keeps the no-tools contract: tools are denied
+  by each CLI's own permissions and a kernel sandbox, and any tool use fails the request.
+  Google has suspended accounts that used Gemini sign-ins through third-party tools;
+  Reprise runs Google's own CLI and never reads the sign-in, but choose Gemini only if
+  you accept that risk. With no model chosen, Gemini uses its light-thinking Flash
+  model, about 6 seconds a request; Antigravity's own default thought for over a minute.
+- **Install** in Settings > AI & Models runs a missing provider's official installer in
+  Terminal. Apple Intelligence opens its System Settings page instead.
+- **Meeting summaries.** When a transcript is ready, the chosen provider writes an
+  overview, key points, decisions and action items, and a notification opens the
+  recording. Long meetings are summarized in parts and merged. Recordings have Summary
+  and Transcript tabs, and a summary says when its transcript has changed. Turn the
+  automatic summary off in Settings > Audio & Meetings.
+- **Recovery key.** Settings > Privacy > Encryption shows the library's recovery key
+  after your Mac password or Touch ID, to copy or save. If the keychain loses the key,
+  Reprise asks for it when it opens and puts it back.
+- **Browser addresses.** Screens from Safari and Chromium browsers keep the page address,
+  without fragments, sign-in tokens or private windows. Addresses are searchable and
+  a button opens the page again. macOS asks once per browser; Settings > Privacy turns
+  it off.
+- **Multiple displays.** Reprise captures the display you are using: the one with the
+  front window, or the one you scrolled or clicked in more recently than you typed.
+  Each display keeps its own resolution, and 1x displays get sharper OCR.
+- **Search.** Korean words now match with particles (회의 finds 회의에서), and the AI
+  plans terms without particles and adds the English or Korean equivalent.
+- The MCP `reprise_get_memory` tool returns a meeting's summary and a screen's address.
+
 ## 0.7.0-alpha.1
 
 - The menu bar no longer makes a screen count as new. Its clock and live status items,

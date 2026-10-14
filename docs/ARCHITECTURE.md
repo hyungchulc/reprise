@@ -11,7 +11,14 @@ Reprise is a Swift Package Manager macOS application. It has no backend service.
 
 ## Capture And Storage
 
-ScreenCaptureKit supplies one bounded still capture at a time. Vision performs
+ScreenCaptureKit supplies one bounded still capture at a time, of the display in use:
+the front window comes from the on-screen window list, its display is the one it
+overlaps most, and a newer scroll or click on another display moves capture to the
+window under the pointer there. Each display keeps its native pixel size, and OCR
+reads 1x displays at up to 3840 pixels. `BrowserURLReader` asks Safari and Chromium
+browsers for the front tab's address over Apple Events with a one-second limit;
+`BrowserAddress` keeps http and https addresses without fragments, credentials or
+secret-like query values, and the address is indexed with the title and text. Vision performs
 on-device OCR; image encoding/deduplication runs off the main actor. Full-size
 images and thumbnails are separate. After 15 minutes, `FrameArchiver` moves full-size
 stills of one pixel size into HEVC movies (frame i at i seconds, keyframes every 30
@@ -47,6 +54,14 @@ SpeechAnalyzer pass runs a SpeechTranscriber per chosen language; `TranscriptMer
 splits each result into timed phrases and keeps the most confident non-overlapping
 ones across languages. Earlier systems transcribe bounded chunks per language.
 Audio duration, transcript segments and failure notes persist with each memory.
+When a transcript is ready, `MeetingSummarizer` sends it to the chosen provider in parts
+that fit the provider's budget and merges the part summaries; the result and a hash of
+its transcript are stored in `meeting_summaries`, so a new transcript marks it stale.
+
+A missing keychain key is recovered with `RecoveryKey`: the master key plus a two-byte
+SHA-256 checksum in Crockford base32. Reprise confirms that the key opens the database
+before `VaultKeychain.restore` saves it with the same access list; an existing item is
+never replaced.
 
 ## Retrieval And UI
 
@@ -55,10 +70,16 @@ and group app runs. Image decoding is cancellable and cached; stale decodes cann
 replace a newer request. Audio uses dedicated playback controls rather than video
 views. Search conversations persist answers and evidence IDs per vault.
 
-Local keyword retrieval does not call a provider. AI search plans bounded query
-alternatives, gathers filtered evidence and validates returned citations. Broad
-summaries sample activity groups across the complete interval. Provider subprocesses
-have time/output limits and provider-specific no-tools profiles.
+Local keyword retrieval does not call a provider. Words of two or more non-Latin
+characters and four or more Latin letters match as prefixes, so Korean words with
+particles are found. AI search plans bounded query alternatives, gathers filtered
+evidence and validates returned citations. Broad summaries sample activity groups
+across the complete interval. Each provider has an evidence budget (moments, bytes and
+prior turns) sized to its context, halved and retried while the model reports that the
+context is too large. CLI subprocesses have time/output limits, Seatbelt profiles and
+provider-specific no-tools settings; Apple's on-device model runs in process through
+FoundationModels guided generation, and Ollama through its loopback HTTP API with a
+JSON schema format.
 
 ## Integrations And Delivery
 

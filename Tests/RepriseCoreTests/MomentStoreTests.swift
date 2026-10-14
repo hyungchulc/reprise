@@ -93,6 +93,21 @@ final class MomentStoreTests: XCTestCase {
         XCTAssertTrue(emptySyntax.isEmpty)
     }
 
+    func testWordsMatchWithKoreanParticlesAndPageAddressesAreSearchable() async throws {
+        let store = try MomentStore(root: temporaryRoot(), keys: testKeys)
+        try await store.insert(Moment(id: "korean", appName: "Notes", text: "내일 회의에서 예산을 정하자"))
+        try await store.insert(Moment(id: "page", appName: "Safari", windowTitle: "Docs", text: "Overview",
+                                      url: "https://developer.apple.com/documentation/foundationmodels?token=secret#top"))
+        let particle = try await store.query(MomentQuery(text: "회의 예산"))
+        XCTAssertEqual(particle.map(\.id), ["korean"])
+        let address = try await store.query(MomentQuery(text: "foundationmodels"))
+        XCTAssertEqual(address.map(\.id), ["page"])
+        let saved = try await store.moment(id: "page")
+        XCTAssertEqual(saved?.url, "https://developer.apple.com/documentation/foundationmodels")
+        let short = try await store.query(MomentQuery(text: "doc"))
+        XCTAssertTrue(short.isEmpty, "Short Latin words match whole words only")
+    }
+
     func testDeletionPreservesSharedMediaAndRejectsEscapesIncludingReplacedSymlink() async throws {
         let root = try temporaryRoot()
         let outside = try temporaryRoot()

@@ -360,6 +360,21 @@ public enum VaultKeychain {
 
     /// Creates the library's master key. `programs` read it without a prompt; nil stands for this program.
     public static func create(root: URL, trusting programs: [URL?]) throws -> SymmetricKey {
+        let key = SymmetricKey(size: .bits256)
+        let status = try add(key, root: root, trusting: programs)
+        if status == errSecDuplicateItem, let existing = try load(root: root) { return existing }
+        guard status == errSecSuccess else { throw Failure.keychain(status) }
+        return key
+    }
+
+    /// Puts a key from a recovery key back into the keychain, with the same access as a new one.
+    /// An existing item is never replaced: it may belong to a different copy of the library.
+    public static func restore(_ key: SymmetricKey, root: URL, trusting programs: [URL?]) throws {
+        let status = try add(key, root: root, trusting: programs)
+        guard status == errSecSuccess else { throw Failure.keychain(status) }
+    }
+
+    private static func add(_ key: SymmetricKey, root: URL, trusting programs: [URL?]) throws -> OSStatus {
         var applications: [SecTrustedApplication] = []
         for program in programs {
             var application: SecTrustedApplication?
@@ -368,15 +383,11 @@ public enum VaultKeychain {
             applications.append(application)
         }
         var created: SecAccess?
-        var status = SecAccessCreate(label as CFString, applications as CFArray, &created)
+        let status = SecAccessCreate(label as CFString, applications as CFArray, &created)
         guard status == errSecSuccess, let access = created else { throw Failure.keychain(status) }
-        let key = SymmetricKey(size: .bits256)
-        status = SecItemAdd([kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account(for: root),
-                             kSecAttrLabel: label, kSecAttrDescription: "Reprise library encryption key",
-                             kSecValueData: key.withUnsafeBytes { Data($0) }, kSecAttrAccess: access] as CFDictionary, nil)
-        if status == errSecDuplicateItem, let existing = try load(root: root) { return existing }
-        guard status == errSecSuccess else { throw Failure.keychain(status) }
-        return key
+        return SecItemAdd([kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account(for: root),
+                           kSecAttrLabel: label, kSecAttrDescription: "Reprise library encryption key",
+                           kSecValueData: key.withUnsafeBytes { Data($0) }, kSecAttrAccess: access] as CFDictionary, nil)
     }
 }
 

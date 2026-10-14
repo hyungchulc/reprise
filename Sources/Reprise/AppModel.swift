@@ -2,10 +2,12 @@ import AppKit
 import AVFoundation
 import Combine
 import ImageIO
+import LocalAuthentication
 import RepriseCore
 import Speech
 import SwiftUI
 import UniformTypeIdentifiers
+@preconcurrency import UserNotifications
 import Vision
 
 @MainActor
@@ -59,6 +61,12 @@ final class AppModel: ObservableObject {
     @Published var accountStatus: AIAccountStatus?
     @Published var checkingProvider = false
     @Published var availableModels: [AIModelOption] = []
+    /// A model download in Ollama: name, completed fraction when known, and Ollama's status line.
+    @Published private(set) var modelDownload: (name: String, fraction: Double?, status: String)?
+    @Published private(set) var summaries: [String: MeetingSummary] = [:]
+    @Published private(set) var summarizing: Set<String> = []
+    @Published private(set) var summaryErrors: [String: String] = [:]
+    private var watchedTranscription: String?
     @Published var showOnboarding = !UserDefaults.standard.bool(forKey: "onboardingComplete")
     @Published var preferences: AppPreferences {
         didSet {
@@ -131,6 +139,16 @@ final class AppModel: ObservableObject {
                 self.select(moment)
             }
             Task { await self.reload(preserve: true) }
+        }.store(in: &subscriptions)
+        // When a transcript is saved, the meeting is summarized; a later transcript replaces the summary.
+        meeting.$transcribingMomentID.removeDuplicates().sink { [weak self] id in
+            guard let self else { return }
+            let finished = self.watchedTranscription
+            self.watchedTranscription = id
+            if id == nil, let finished { Task { await self.transcriptionFinished(finished) } }
+        }.store(in: &subscriptions)
+        $selection.compactMap { $0 }.filter { $0.kind == "meeting" }.removeDuplicates { $0.id == $1.id }.sink { [weak self] moment in
+            Task { await self?.loadSummary(for: moment.id) }
         }.store(in: &subscriptions)
         NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange).sink { [weak self] _ in
             Task { @MainActor in self?.timeZone = .autoupdatingCurrent; await self?.reload() }
@@ -494,18 +512,146 @@ final class AppModel: ObservableObject {
 
     func signIn() {
         guard let command = ai.loginCommand(configuration: provider) else { error = "Install the selected provider CLI or set its executable path."; return }
+        func quoted(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        let line = ([command.executable.path] + command.arguments).map(quoted).joined(separator: " ")
+        let note = provider.provider == .gemini ? "printf 'Sign in with Google when asked, then type /quit.\\n\\n'\n" : ""
+        openTerminal(name: "Sign-In", lines: "unset OPENAI_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN XAI_API_KEY GROK_API_KEY GEMINI_API_KEY CURSOR_API_KEY\nexport GROK_DISABLE_API_KEY_AUTH=1\n\(note)\(line)\nprintf '\\nReturn to Reprise and check sign-in. Press Return to close.\\n'")
+    }
+
+    /// Runs the vendor's own installer in Terminal, so each step and any password prompt stay visible.
+    func installProvider() {
+        let kind = provider.provider
+        if kind == .apple { openAppleIntelligenceSettings(); return }
+        guard let command = kind.installScript else { return }
+        let echoed = command.replacingOccurrences(of: "'", with: "'\\''")
+        openTerminal(name: "Install", lines: "printf 'Installing \(kind.displayName) with its official installer:\\n  %s\\n\\n' '\(echoed)'\n\(command)\nprintf '\\nWhen it finishes, return to Reprise and choose Refresh. Press Return to close.\\n'")
+    }
+
+    private func openTerminal(name: String, lines: String) {
         do {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Reprise-Login", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            let file = directory.appendingPathComponent("\(provider.provider.displayName)-Sign-In.command")
-            func quoted(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-            let line = ([command.executable.path] + command.arguments).map(quoted).joined(separator: " ")
-            let script = "#!/bin/zsh\nunset OPENAI_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN XAI_API_KEY GROK_API_KEY\nexport GROK_DISABLE_API_KEY_AUTH=1\n\(line)\nprintf '\\nReturn to Reprise and check sign-in. Press Return to close.\\n'\nread -r\nrm -- \"$0\"\n"
+            let file = directory.appendingPathComponent("\(provider.provider.displayName.replacingOccurrences(of: " ", with: "-"))-\(name).command")
+            let script = "#!/bin/zsh\n\(lines)\nread -r\nrm -- \"$0\"\n"
             try Data(script.utf8).write(to: file, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
             NotificationCenter.default.post(name: .repriseCloseMemory, object: nil)
             NSWorkspace.shared.open(file)
         } catch { self.error = error.localizedDescription }
+    }
+
+    func openAppleIntelligenceSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Siri-Settings.extension") { NSWorkspace.shared.open(url) }
+    }
+
+    func startOllama() {
+        let app = URL(fileURLWithPath: "/Applications/Ollama.app")
+        guard FileManager.default.fileExists(atPath: app.path) else { error = "Open Ollama, or start it with \"ollama serve\" in Terminal."; return }
+        NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration()) { _, failure in
+            let message = failure?.localizedDescription
+            Task { @MainActor in
+                if let message { self.error = message; return }
+                // The server takes a moment to accept connections after the app opens.
+                for _ in 0..<20 where await Ollama.version() == nil { try? await Task.sleep(for: .milliseconds(500)) }
+                await self.refreshStatus()
+            }
+        }
+    }
+
+    func downloadModel(_ name: String) {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard modelDownload == nil, !name.isEmpty else { return }
+        modelDownload = (name, nil, "Starting")
+        Task {
+            do {
+                try await Ollama.pull(name) { fraction, status in
+                    Task { @MainActor in self.modelDownload = (name, fraction, status) }
+                }
+                modelDownload = nil
+                if provider.provider == .ollama { provider.model = name; await saveSettings() }
+            } catch {
+                modelDownload = nil
+                self.error = error.localizedDescription
+            }
+            await refreshStatus()
+        }
+    }
+
+    // MARK: Meeting summaries
+
+    func loadSummary(for id: String) async {
+        guard summaries[id] == nil, let saved = try? await store.summary(for: id) else { return }
+        summaries[id] = saved
+    }
+
+    private func transcriptionFinished(_ id: String) async {
+        guard preferences.summarizeMeetings, let moment = try? await store.moment(id: id), moment.kind == "meeting",
+              !moment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        await loadSummary(for: id)
+        if let summary = summaries[id], summary.matches(moment) { return }
+        await summarize(moment, automatic: true)
+    }
+
+    /// Summarizes with the chosen provider. An automatic summary ends with a notification; a failed
+    /// one stays on the recording with a Try Again button rather than interrupting.
+    func summarize(_ moment: Moment, automatic: Bool = false) async {
+        let id = moment.id
+        guard moment.kind == "meeting", !summarizing.contains(id) else { return }
+        guard !moment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            summaryErrors[id] = "Transcribe this recording first."; return
+        }
+        let config = provider
+        summarizing.insert(id); summaryErrors[id] = nil
+        defer { summarizing.remove(id) }
+        if accountStatus == nil { await refreshStatus() }
+        guard accountStatus?.signedIn != false else {
+            summaryErrors[id] = "Sign in to \(config.provider.displayName) in AI & Models, then try again."; return
+        }
+        do {
+            let result = try await MeetingSummarizer(client: ai).summarize(moment, configuration: config)
+            for entry in result.usage { try? await store.recordUsage(entry) }
+            try await store.saveSummary(result.summary, for: id)
+            summaries[id] = result.summary
+            if automatic { notifySummary(moment) }
+        } catch {
+            let failure = error as? MeetingSummaryFailure
+            for entry in failure?.usage ?? [] { try? await store.recordUsage(entry) }
+            summaryErrors[id] = (failure?.underlyingError ?? error).localizedDescription
+        }
+        usages = (try? await store.usage(since: calendar.date(byAdding: .day, value: -30, to: Date()))) ?? usages
+    }
+
+    /// The notification names the meeting but carries none of the summary, because Notification
+    /// Center keeps its own unencrypted history.
+    private func notifySummary(_ moment: Moment) {
+        let center = UNUserNotificationCenter.current()
+        let title = moment.windowTitle.isEmpty ? "Meeting" : moment.windowTitle
+        let id = moment.id
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = "Meeting summary ready"
+            content.subtitle = title
+            content.body = "Open Reprise to read the key points, decisions and action items."
+            content.userInfo = ["momentID": id]
+            center.add(UNNotificationRequest(identifier: "summary-\(id)", content: content, trigger: nil))
+        }
+    }
+
+    func openMemory(id: String) async {
+        searchPresented = false
+        NotificationCenter.default.post(name: .repriseOpenMemory, object: nil)
+        await openCitation(id)
+    }
+
+    // MARK: Recovery key
+
+    /// The library's recovery key, shown only after the Mac's owner authenticates.
+    func revealRecoveryKey() async throws -> String {
+        let context = LAContext()
+        _ = try await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "show the recovery key for your Reprise library")
+        guard let key = try VaultKeychain.load(root: root) else { throw VaultKeychain.Failure.missing }
+        return RecoveryKey.encode(key)
     }
     func ask() {
         let input = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -515,7 +661,11 @@ final class AppModel: ObservableObject {
         searchHistory.record(rootQuery)
         saveSearchHistory()
         guard stats.momentCount > 0 else { searchError = "No memories yet. Record a screen or meeting, or import images first."; return }
-        guard accountStatus?.signedIn != false else { searchError = "Sign in to your \(provider.provider.displayName) subscription in AI & Models before searching."; return }
+        guard accountStatus?.signedIn != false else {
+            searchError = provider.provider.hasSignIn ? "Sign in to your \(provider.provider.displayName) subscription in AI & Models before searching."
+                : "\(provider.provider.displayName): \(accountStatus?.message ?? "not ready"). Open AI & Models."
+            return
+        }
         asking = true; pendingQuestion = input; searchError = nil; searchNotice = nil; restoredSearchDate = nil
         if previousTurns.isEmpty { response = nil; aiMatches = [] }
         setSearchDraft("")
@@ -625,6 +775,15 @@ final class AppModel: ObservableObject {
 
     /// The library key from the login keychain, created on first use. A library that is already
     /// encrypted never gets a new key: nothing sealed with the old one could be read with it.
+    /// Checks a recovery key against the library before it goes into the keychain.
+    nonisolated static func restoreLibraryKey(_ text: String, root: URL = ReprisePaths.root) throws {
+        let key = try RecoveryKey.decode(text)
+        guard MomentStore.canUnlock(root: root, keys: VaultKeys(master: key)) else { throw RecoveryKey.Failure.wrongLibrary }
+        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/RepriseMCP")
+        let programs: [URL?] = FileManager.default.isExecutableFile(atPath: helper.path) ? [nil, helper] : [nil]
+        try VaultKeychain.restore(key, root: root, trusting: programs)
+    }
+
     nonisolated static func libraryKeys(root: URL) throws -> VaultKeys {
         if let master = try VaultKeychain.load(root: root) { return VaultKeys(master: master) }
         guard !MomentStore.isEncryptedLibrary(root: root) else { throw VaultKeychain.Failure.missing }

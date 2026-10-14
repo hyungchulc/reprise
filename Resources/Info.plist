@@ -5,7 +5,7 @@
 <key>CFBundleIdentifier</key><string>local.aria.reprise</string>
 <key>CFBundleName</key><string>Reprise</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.7.0-alpha.1</string>
+<key>CFBundleShortVersionString</key><string>0.8.0-alpha.1</string>
 <key>CFBundleVersion</key><string>2</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
@@ -13,6 +13,7 @@
 <key>NSMicrophoneUsageDescription</key><string>Record audio only when you start a meeting recording.</string>
 <key>NSSpeechRecognitionUsageDescription</key><string>Transcribe recorded meetings on this Mac when supported.</string>
 <key>NSScreenCaptureUsageDescription</key><string>Save searchable screen memories after you start recording.</string>
+<key>NSAppleEventsUsageDescription</key><string>Save the address of the browser tab you are looking at, so you can find and reopen pages you visited.</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>SUFeedURL</key><string>https://raw.githubusercontent.com/hyungchulc/reprise/main/appcast.xml</string>
 <key>SUPublicEDKey</key><string>3DLK4qjGUSIe6OZBFageXbJpJqIiNXDBz9Q7ivkRZ/U=</string>

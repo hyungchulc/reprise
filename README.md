@@ -60,11 +60,11 @@ downloaded-installation test on every supported macOS version.
 
 | Area | Alpha functionality |
 | --- | --- |
-| Screen memory | Periodic ScreenCaptureKit still frames, on-device Vision OCR, local full-text index |
+| Screen memory | Periodic ScreenCaptureKit still frames of the display you are using, on-device Vision OCR, browser page addresses, local full-text index |
 | Timeline | Full-screen overlay, app icons and icon-derived colors, calendar, compressed recording gaps, 30-second navigation |
-| Search | Local keyword search, AI query planning, source-linked answers, follow-up questions, saved conversations |
-| Meetings | Explicit microphone recording, optional system audio, post-recording on-device transcription in up to five languages at once, inline playback and timestamp seeking |
-| AI providers | Codex, Claude and Grok through installed subscription CLIs; model selection and reported token usage |
+| Search | Local keyword search that also matches Korean words with particles, AI query planning, source-linked answers, follow-up questions, saved conversations |
+| Meetings | Explicit microphone recording, optional system audio, post-recording on-device transcription in up to five languages at once, automatic summaries with decisions and action items, inline playback and timestamp seeking |
+| AI providers | Claude, Codex, Gemini, Grok, Cursor and OpenCode (free models) through their CLIs; Apple's on-device model and Ollama on your Mac; install and sign-in from Settings, model selection and reported token usage |
 | MCP | Opt-in read-only memory search for Claude Desktop, Claude Code, Codex, Cursor and compatible local clients |
 | Appearance | System/custom accent, system/manual light and dark modes, text size, transitions and optional edge glow |
 | Controls | Editable global shortcut, Dock/menu bar placement, launch options, pause reminders, exclusions and retention |
@@ -81,24 +81,38 @@ explicit setting. No sample library is created.
 
 ## AI Search
 
-Install and sign in to a supported provider CLI separately. In **Settings > AI &
-Models**, select the provider, model, and optionally an absolute executable path.
-A blank model uses the current provider default. Reprise does not bundle the CLIs
-or create API keys. An eligible subscription and compatible CLI are required;
-authentication, availability and limits remain provider-controlled.
+In **Settings > AI & Models**, select the provider and model. **Install** runs the
+provider's official installer in Terminal, so every step stays visible, and **Sign In**
+opens its own subscription sign-in. Reprise does not bundle the CLIs or create API
+keys; authentication, availability and limits remain provider-controlled.
 
-Search plans queries over the local FTS index, then supplies bounded OCR and
-transcript evidence to the chosen provider. Focused answers use up to 24 memories;
-activity summaries sample up to 96 representatives across the full filtered
-interval. Answers link back to stored memories and show coverage. **Sampling and
-excerpt limits can omit details; an answer is not an exhaustive account of a day.**
+| Provider | What it needs |
+| --- | --- |
+| Claude, Codex, Grok, Cursor | The provider's CLI and a subscription sign-in |
+| Gemini | Google's Antigravity CLI (`agy`), which replaced the personal Gemini CLI, and a Google sign-in |
+| OpenCode | The OpenCode CLI only. Free models, no account. Zero-retention models are listed first; others may use prompts to improve their models |
+| Apple Intelligence | macOS 26 with Apple Intelligence on. Runs on this Mac; nothing leaves it |
+| Ollama | The Ollama app and a downloaded model. **Download** in Settings fetches a suggested or named model |
+
+Google has suspended accounts that used Gemini sign-ins through third-party tools.
+Reprise runs Google's own CLI in its documented mode and never reads the sign-in, but
+the risk is Google's call; choose Gemini only if you accept it.
+
+Search plans keywords over the local full-text index, then supplies bounded OCR and
+transcript evidence to the chosen provider. The language model never reads the whole
+library: it writes the search terms and the answer, and local search finds the
+memories in between. Focused answers use up to 24 memories (8 on Apple's on-device
+model, 16 on Ollama); activity summaries sample up to 96 representatives across the
+full filtered interval. Answers link back to stored memories and show coverage.
+**Sampling and excerpt limits can omit details; an answer is not an exhaustive
+account of a day.**
 
 Provider subprocesses use explicit tool restrictions, isolated temporary settings,
 timeouts and bounded output. Unsupported CLI contracts fail closed. These controls
 reduce agent side effects; they are not a guarantee that a third-party executable
-is trustworthy. Remaining subscription quota is shown as unknown when unavailable.
-Apple Intelligence, Private Cloud Compute and direct API-key providers are not
-implemented in this alpha. See [provider contracts](docs/PROVIDERS.md).
+is trustworthy. Remaining subscription quota is shown as unknown when unavailable. Private Cloud
+Compute is not available to third-party apps, and direct API-key providers are not
+implemented. See [provider contracts](docs/PROVIDERS.md).
 
 ## MCP Connections
 
@@ -119,13 +133,18 @@ the app version and contains the database, images, audio, transcripts, search hi
 and usage. Since 0.6 the vault is **encrypted**: the database with SQLCipher and every
 screenshot, movie and recording with AES-256-GCM. The key lives in your login keychain,
 where only Reprise and its MCP helper can read it without asking. If any other app asks
-macOS for “Reprise Vault Key”, deny it unless you started that request. Losing the
-login keychain loses the vault, so keep the Mac's keychain in your backups.
-[What encryption covers](docs/PRIVACY.md#encryption).
+macOS for “Reprise Vault Key”, deny it unless you started that request. Save the
+**recovery key** from **Settings > Privacy > Encryption** in a password manager: if the
+keychain loses the key, for example on a new Mac, Reprise asks for it when it opens.
+Without either, the vault cannot be opened. [What encryption covers](docs/PRIVACY.md#encryption).
 Reprise does not bundle any recorded memories or credentials in its releases.
 
 Capture defaults to native Retina resolution, 85% image quality and a 3-second
-interval. Settings expose smaller resolutions, intervals, retention and storage
+interval. With several displays, Reprise records the one with the window you are
+using, or the one you are scrolling or clicking in, each at its own resolution.
+In Safari and Chromium browsers it also saves the page address, without fragments
+or sign-in tokens and never from private windows; macOS asks once per browser, and
+**Settings > Privacy** turns it off. Settings expose smaller resolutions, intervals, retention and storage
 limits. Unchanged-screen deduplication that ignores the menu bar's clock and live status
 items, HEIC with JPEG fallback, separate 400px HEIC thumbnails, HEVC compression of
 screens older than 15 minutes (roughly 4–7 times smaller in our samples), re-encoding at
@@ -136,6 +155,11 @@ against another app. CPU and process memory are visible; GPU usage is not measur
 
 Automatic transcription saves the recording first, then transcribes it on-device in
 each chosen language and keeps, for every passage, the language that fits it best.
+When a transcript is ready, the chosen AI provider summarizes it into an overview,
+key points, decisions and action items, and a notification opens the recording. The
+summary is stored encrypted with the recording; the notification shows only the
+meeting's title. Turn it off in **Settings > Audio & Meetings**, or summarize any recording
+from its Summary tab.
 On macOS 26 and later, speech models download when a language is chosen. Failures remain visible
 and the original audio is preserved. A recording can last at most four hours.
 Title-based privacy and meeting detection are best-effort, not complete protection.
@@ -181,7 +205,8 @@ update feed and public key before distribution. [Release procedure](docs/RELEASI
 
 The app uses SwiftUI/AppKit, ScreenCaptureKit, Vision, Speech, AVFoundation, SQLCipher
 FTS5, the official MCP Swift SDK, and Sparkle. There is no bundled LLM, vector
-database or always-running inference service. [Architecture](docs/ARCHITECTURE.md).
+database or always-running inference service; Apple's on-device model and Ollama run
+only when chosen. [Architecture](docs/ARCHITECTURE.md).
 
 Report reproducible problems through [Issues](https://github.com/hyungchulc/reprise/issues).
 Include macOS/app versions and steps, but **never upload your vault, raw recordings,

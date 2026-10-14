@@ -27,6 +27,7 @@ struct SettingsView: View {
     @State private var confirmCleanup = false
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
+    @State private var showRecoveryKey = false
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -62,6 +63,7 @@ struct SettingsView: View {
         .onAppear { page = SettingsPage(rawValue: model.settingsPage) ?? .general }
         .onChange(of: page) { _, value in model.settingsPage = value?.rawValue ?? "General" }
         .onDisappear { metrics.stop(); Task { await model.saveSettings() } }
+        .sheet(isPresented: $showRecoveryKey) { RecoveryKeyView(model: model) }
         .confirmationDialog("Permanently remove memories outside retention and storage limits?", isPresented: $confirmCleanup) {
             Button("Apply Retention", role: .destructive) { Task { await model.cleanLibrary() } }
         }
@@ -122,6 +124,9 @@ struct SettingsView: View {
         }
         Section("Meetings") {
             Toggle("Detect meeting windows", isOn: $model.preferences.detectMeetings)
+            Toggle("Summarize meetings automatically", isOn: $model.preferences.summarizeMeetings)
+            Text("After transcription, \(model.provider.provider.displayName) writes key points, decisions and action items, and a notification says when they are ready. Open the recording to read them.")
+                .repriseFont(.caption).foregroundStyle(.secondary)
             MeetingStatus(model: model, detector: model.meetingDetector, recorder: model.meeting)
         }
     }
@@ -136,6 +141,11 @@ struct SettingsView: View {
                     Button(app.localizedName ?? "Application") { if let id = app.bundleIdentifier, !model.settings.excludedBundleIDs.contains(id) { model.settings.excludedBundleIDs.append(id) } }
                 }
             }
+        }
+        Section("Browser Addresses") {
+            Toggle("Record the address of the current tab", isOn: $model.settings.recordBrowserAddresses)
+            Text("Safari, Chrome, Arc, Edge, Brave and Vivaldi. macOS asks once per browser. Incognito windows are skipped, and sign-in tokens and other secret-looking parts are removed from addresses.")
+                .repriseFont(.caption).foregroundStyle(.secondary)
         }
         Section("Private Window Titles") {
             TextEditor(text: Binding(get: { model.settings.excludedTitleTerms.joined(separator: "\n") }, set: { model.settings.excludedTitleTerms = $0.split(separator: "\n").map(String.init) }))
@@ -163,6 +173,9 @@ struct SettingsView: View {
             Text("Screen text, transcripts, screenshots and recordings are stored encrypted. Only Reprise and its MCP helper can use the key without asking. If another app asks for “Reprise Vault Key”, deny it unless you started that request.")
                 .font(.caption).foregroundStyle(.secondary)
             if let status = model.encryptionStatus { Text(status).font(.caption).foregroundStyle(.orange) }
+            Button("Recovery Key...", systemImage: "key") { showRecoveryKey = true }
+            Text("If this Mac's keychain loses the key, such as on a new Mac, the recovery key opens the library again. Keep it in a password manager.")
+                .repriseFont(.caption).foregroundStyle(.secondary)
         }
         Section("Compression") {
             Toggle("Compress older screens", isOn: $model.settings.archiveOlderFrames)
@@ -244,6 +257,8 @@ struct AppearanceSettings: View {
 struct AISettings: View {
     @ObservedObject var model: AppModel
     @State private var customModel = false
+    @State private var downloadName = Ollama.suggestedModels[0].id
+    private var kind: AIProviderKind { model.provider.provider }
     private var selection: Binding<String> {
         Binding(get: {
             if customModel || (!model.provider.model.isEmpty && !model.availableModels.contains(where: { $0.id == model.provider.model })) { return "__custom" }
@@ -253,32 +268,77 @@ struct AISettings: View {
             if !customModel { model.provider.model = value; Task { await model.saveSettings() } }
         })
     }
+    private var installed: Bool { model.providerStatus?.isInstalled == true }
     var body: some View {
         Section("AI & Models") {
-            Picker("Provider", selection: Binding(get: { model.provider.provider }, set: { model.selectProvider($0); customModel = false })) {
+            Picker("Provider", selection: Binding(get: { kind }, set: { model.selectProvider($0); customModel = false })) {
                 ForEach(AIProviderKind.allCases) { Text($0.displayName).tag($0) }
             }
-            Picker("Model", selection: selection) {
-                Text("Current provider default").tag("")
-                ForEach(model.availableModels) { Text($0.name).tag($0.id) }
-                Text("Custom model...").tag("__custom")
+            Text(Self.about(kind)).repriseFont(.caption).foregroundStyle(.secondary)
+            if kind != .apple {
+                Picker("Model", selection: selection) {
+                    Text(kind == .opencode ? "Space Bunny (free, not kept)" : kind == .ollama ? "First downloaded model"
+                         : kind == .gemini ? "Gemini Flash, light thinking (fast)" : "Current provider default").tag("")
+                    ForEach(model.availableModels) { Text($0.name).tag($0.id) }
+                    Text("Custom model...").tag("__custom")
+                }
+                if selection.wrappedValue == "__custom" { TextField("Model identifier", text: $model.provider.model).textFieldStyle(.roundedBorder) }
             }
-            if selection.wrappedValue == "__custom" { TextField("Model identifier", text: $model.provider.model).textFieldStyle(.roundedBorder) }
             LabeledContent("Account", value: model.accountStatus?.message ?? "Checking...")
             LabeledContent("Search", value: model.providerStatus?.canAnswer == true ? "Available" : (model.providerStatus?.message ?? "Checking..."))
             HStack {
-                Button("Sign In", systemImage: "person.crop.circle") { model.signIn() }.disabled(model.providerStatus?.isInstalled != true)
+                if model.providerStatus != nil && !installed {
+                    Button(kind == .apple ? "Open Apple Intelligence Settings" : "Install \(kind.displayName)", systemImage: kind == .apple ? "gearshape" : "arrow.down.circle") { model.installProvider() }
+                } else if kind.hasSignIn {
+                    Button("Sign In", systemImage: "person.crop.circle") { model.signIn() }.disabled(!installed)
+                } else if kind == .ollama && model.accountStatus?.signedIn == false {
+                    Button("Start Ollama", systemImage: "play.circle") { model.startOllama() }
+                }
                 Spacer()
                 if model.checkingProvider { ProgressView().controlSize(.small) }
                 Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refreshStatus() } }.disabled(model.checkingProvider)
             }
-            Text("AI search sends selected screen text and transcripts to this provider. Images and audio files stay on this Mac.").repriseFont(.caption).foregroundStyle(.secondary)
+            if model.providerStatus != nil && !installed, kind != .apple {
+                Text("Install opens Terminal and runs \(kind.displayName)'s own installer, so you can see each step. Choose Refresh when it finishes.")
+                    .repriseFont(.caption).foregroundStyle(.secondary)
+            }
+        }
+        if kind == .ollama && model.accountStatus?.signedIn == true {
+            Section("Ollama Models") {
+                Picker("Download", selection: $downloadName) {
+                    ForEach(Ollama.suggestedModels, id: \.id) { Text($0.name).tag($0.id) }
+                }.disabled(model.modelDownload != nil)
+                HStack {
+                    TextField("Or another model name", text: $downloadName).textFieldStyle(.roundedBorder).disabled(model.modelDownload != nil)
+                    Button("Download", systemImage: "arrow.down.circle") { model.downloadModel(downloadName) }
+                        .disabled(model.modelDownload != nil || model.availableModels.contains { $0.id == downloadName })
+                }
+                if let download = model.modelDownload {
+                    if let fraction = download.fraction { ProgressView(value: fraction) { Text("\(download.name): \(download.status)").repriseFont(.caption) } }
+                    else { HStack { ProgressView().controlSize(.small); Text("\(download.name): \(download.status)").repriseFont(.caption) } }
+                }
+                Text("Models run in this Mac's memory. On a 16 GB Mac, models up to about 4 GB leave room for other apps.")
+                    .repriseFont(.caption).foregroundStyle(.secondary)
+            }
         }
         Section("CLI Connection") {
-            TextField("Executable path", text: Binding(get: { model.provider.executablePath ?? "" }, set: { model.provider.executablePath = $0.isEmpty ? nil : $0 }))
+            if kind.commandName != nil && kind != .ollama {
+                TextField("Executable path", text: Binding(get: { model.provider.executablePath ?? "" }, set: { model.provider.executablePath = $0.isEmpty ? nil : $0 }))
+            }
             Stepper("Request timeout: \(Int(model.provider.timeoutSeconds)) s", value: $model.provider.timeoutSeconds, in: 15...180, step: 15)
         }
         .onDisappear { Task { await model.saveSettings() } }
+    }
+
+    static func about(_ kind: AIProviderKind) -> String {
+        switch kind {
+        case .apple: "Apple's model runs on this Mac and nothing leaves it. It reads about 4,000 tokens at once, so answers draw on fewer memories."
+        case .ollama: "Runs a downloaded model on this Mac with Ollama, and nothing leaves it. Speed depends on the model and this Mac's memory."
+        case .opencode: "Free OpenCode Zen models with no sign-in. Searched text goes to the model's provider; models marked \"not kept\" keep nothing, others may use it for training."
+        case .gemini: "Uses your Google account through Antigravity CLI, which replaced Gemini CLI. Searched screen text and transcripts are sent to Google. Google has suspended accounts that used their sign-in in third-party tools; Reprise runs Google's own CLI and never reads the sign-in, but the risk is not zero."
+        case .cursor: "Uses your Cursor subscription. Searched screen text and transcripts are sent to Cursor and the model you choose."
+        default: "Uses your \(kind.displayName) subscription through its CLI. Searched screen text and transcripts are sent to the provider; images and audio stay on this Mac."
+        }
     }
 }
 

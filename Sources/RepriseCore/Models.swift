@@ -17,14 +17,16 @@ public struct Moment: Identifiable, Codable, Hashable, Sendable {
     public var audioDuration: Double?
     public var transcriptSegments: [TranscriptSegment]?
     public var transcriptionNote: String?
-    public init(id: String = UUID().uuidString, timestamp: Date = Date(), appName: String, bundleID: String = "", windowTitle: String = "", text: String = "", imagePath: String = "", thumbnailPath: String = "", videoPath: String? = nil, videoOffset: Double? = nil, isBookmarked: Bool = false, kind: String = "screen", byteCount: Int64 = 0, audioDuration: Double? = nil, transcriptSegments: [TranscriptSegment]? = nil, transcriptionNote: String? = nil) {
+    /// The address of the browser tab on screen, without fragments or secret-looking query values.
+    public var url: String?
+    public init(id: String = UUID().uuidString, timestamp: Date = Date(), appName: String, bundleID: String = "", windowTitle: String = "", text: String = "", imagePath: String = "", thumbnailPath: String = "", videoPath: String? = nil, videoOffset: Double? = nil, isBookmarked: Bool = false, kind: String = "screen", byteCount: Int64 = 0, audioDuration: Double? = nil, transcriptSegments: [TranscriptSegment]? = nil, transcriptionNote: String? = nil, url: String? = nil) {
         self.id = id; self.timestamp = timestamp; self.appName = appName
         self.bundleID = bundleID; self.windowTitle = windowTitle; self.text = text
         self.imagePath = imagePath; self.thumbnailPath = thumbnailPath
         self.videoPath = videoPath; self.videoOffset = videoOffset
         self.isBookmarked = isBookmarked; self.kind = kind; self.byteCount = byteCount
         self.audioDuration = audioDuration; self.transcriptSegments = transcriptSegments
-        self.transcriptionNote = transcriptionNote
+        self.transcriptionNote = transcriptionNote; self.url = url
     }
 }
 
@@ -110,6 +112,8 @@ public struct CaptureSettings: Codable, Equatable, Sendable {
     /// Movies whose screens are all older than `compactAfterDays` are re-encoded at half resolution.
     public var compactOlderFrames: Bool = true
     public var compactAfterDays: Int = 7
+    /// Saves the address of the current tab in Safari and Chromium browsers; macOS asks once per browser.
+    public var recordBrowserAddresses: Bool = true
     public init() {}
 
     // Each key falls back on its own, so a setting added in a later version never resets the others.
@@ -130,6 +134,7 @@ public struct CaptureSettings: Codable, Equatable, Sendable {
         archiveQuality = values.value(.archiveQuality, default: defaults.archiveQuality)
         compactOlderFrames = values.value(.compactOlderFrames, default: defaults.compactOlderFrames)
         compactAfterDays = values.value(.compactAfterDays, default: defaults.compactAfterDays)
+        recordBrowserAddresses = values.value(.recordBrowserAddresses, default: defaults.recordBrowserAddresses)
     }
 
     /// Zero keeps the display's backing pixels; explicit limits never upscale.

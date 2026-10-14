@@ -187,8 +187,11 @@ final class AIProviderTests: XCTestCase {
         let client = AIClient()
         for provider in AIProviderKind.allCases {
             let status = await client.status(configuration: AIProviderConfiguration(provider: provider))
-            XCTAssertTrue(status.isInstalled)
-            XCTAssertTrue(status.canAnswer, "\(provider): \(status.message)")
+            // Local models depend on this Mac's settings and downloads, not on an installed CLI.
+            if !provider.runsOnThisMac {
+                XCTAssertTrue(status.isInstalled)
+                XCTAssertTrue(status.canAnswer, "\(provider): \(status.message)")
+            }
             XCTAssertNil(status.quotaRemaining)
             XCTAssertFalse(status.authenticationVerified)
         }
@@ -245,6 +248,63 @@ final class AIProviderTests: XCTestCase {
     private func requireNativeProviders() throws {
         guard ProcessInfo.processInfo.environment["REPRISE_TEST_NATIVE_PROVIDERS"] == "1" else {
             throw XCTSkip("Set REPRISE_TEST_NATIVE_PROVIDERS=1 to check installed CLI metadata contracts without inference.")
+        }
+    }
+
+    func testAntigravityCursorAndOpenCodeStreams() throws {
+        let answer = #"{\"answer\":\"Found [M1]\",\"citations\":[\"M1\"]}"#
+        let gemini = """
+        {"event":"init"}
+        {"event":"step_update","step_update":{"step_type":"agent_response"}}
+        {"event":"result","result":{"status":"SUCCESS","response":"\(answer)","usage":{"input_tokens":13800,"output_tokens":12},"denied_actions":[]}}
+        """
+        XCTAssertEqual(try parse(gemini, provider: .gemini).citations, references)
+        XCTAssertEqual(try parse(gemini, provider: .gemini).usage.inputTokens, 13800)
+        XCTAssertThrowsError(try parse(gemini.replacingOccurrences(of: "agent_response", with: "tool"), provider: .gemini)) {
+            XCTAssertEqual($0 as? AIProviderError, .toolAttempt)
+        }
+        XCTAssertThrowsError(try parse(gemini.replacingOccurrences(of: #""denied_actions":[]"#, with: #""denied_actions":["run_command"]"#), provider: .gemini)) {
+            XCTAssertEqual($0 as? AIProviderError, .toolAttempt)
+        }
+        XCTAssertThrowsError(try parse(#"{"event":"result","result":{"status":"ERROR","error":"Please sign in again"}}"#, provider: .gemini)) {
+            XCTAssertEqual($0 as? AIProviderError, .authenticationRequired)
+        }
+        XCTAssertEqual(AICommand.geminiSchema(#"{"properties":{"kind":{"type":["string","null"],"enum":["screen",null]},"none":{"enum":[null]}}}"#),
+                       #"{"properties":{"kind":{"anyOf":[{"enum":["screen"],"type":"string"},{"type":"null"}]},"none":{"type":"null"}}}"#)
+        // The structured answer comes back through Antigravity's finish step and the result.
+        let finished = """
+        {"event":"step_update","step_update":{"step_type":"tool","tool_name":"finish","tool_info":{"name":"finish","parameters":{"answer":"Found [M1]","citations":["M1"]}}}}
+        {"event":"result","result":{"status":"SUCCESS","response":"```json\\n{}\\n```","structured_output":{"answer":"Found [M1]","citations":["M1"]},"usage":{"input_tokens":1,"output_tokens":2}}}
+        """
+        XCTAssertEqual(try parse(finished, provider: .gemini).text, "Found [M1]")
+        XCTAssertThrowsError(try parse(finished.replacingOccurrences(of: #""tool_name":"finish""#, with: #""tool_name":"run_command""#), provider: .gemini)) {
+            XCTAssertEqual($0 as? AIProviderError, .toolAttempt)
+        }
+
+        // Cursor's result text joins every assistant message, so the last message is the answer.
+        let cursor = """
+        {"type":"system","subtype":"init","model":"Auto"}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Checking the evidence."}]}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"\(answer)"}]}}
+        {"type":"result","subtype":"success","is_error":false,"result":"Checking the evidence.\(answer)"}
+        """
+        XCTAssertEqual(try parse(cursor, provider: .cursor).text, "Found [M1]")
+        let cursorTool = cursor.replacingOccurrences(of: #"{"type":"system","subtype":"init","model":"Auto"}"#,
+                                                     with: #"{"type":"tool_call","subtype":"started","tool_call":{}}"#)
+        XCTAssertThrowsError(try parse(cursorTool, provider: .cursor)) { XCTAssertEqual($0 as? AIProviderError, .toolAttempt) }
+
+        // OpenCode streams text parts and ends the step with a reason.
+        let opencode = """
+        {"type":"step_start","part":{"type":"step-start"}}
+        {"type":"text","part":{"type":"text","text":"Here it is: {\\"answer\\":\\"Found [M1]\\","}}
+        {"type":"text","part":{"type":"text","text":"\\"citations\\":[\\"M1\\"]}"}}
+        {"type":"step_finish","part":{"type":"step-finish","reason":"stop","tokens":{"input":35000,"output":20}}}
+        """
+        let parsed = try parse(opencode, provider: .opencode)
+        XCTAssertEqual(parsed.text, "Found [M1]")
+        XCTAssertEqual(parsed.usage.inputTokens, 35000)
+        XCTAssertThrowsError(try parse(opencode.replacingOccurrences(of: #""reason":"stop""#, with: #""reason":"tool-calls""#), provider: .opencode)) {
+            XCTAssertEqual($0 as? AIProviderError, .toolAttempt)
         }
     }
 

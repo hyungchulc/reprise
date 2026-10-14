@@ -30,6 +30,8 @@ struct AppPreferences: Codable, Equatable {
     var speechLocale = Locale.current.identifier
     var pauseReminders: Bool? = true
     var edgeGlow: Bool? = true
+    /// After transcription, the chosen AI provider summarizes each meeting and a notification says when it is ready.
+    var summarizeMeetings = true
 
     init() {}
 
@@ -58,6 +60,7 @@ struct AppPreferences: Codable, Equatable {
         speechLocales = values.value(.speechLocales, default: migrated)
         pauseReminders = values.value(.pauseReminders, default: true)
         edgeGlow = values.value(.edgeGlow, default: true)
+        summarizeMeetings = values.value(.summarizeMeetings, default: defaults.summarizeMeetings)
     }
 
     var colorScheme: ColorScheme? { followSystemAppearance ? nil : (darkMode ? .dark : .light) }

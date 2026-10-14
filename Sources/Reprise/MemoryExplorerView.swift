@@ -66,6 +66,9 @@ struct MemoryExplorerView: View {
                     if let moment = model.selection, moment.kind == "meeting", !searchExpanded {
                         MemoryAudioPanel(moment: moment, audio: audio, recorder: model.meeting, transcriptExpanded: $transcriptExpanded,
                                          transcriptHeight: min(240, max(80, geometry.size.height - 450)),
+                                         summary: model.summaries[moment.id], summarizing: model.summarizing.contains(moment.id),
+                                         summaryError: model.summaryErrors[moment.id], providerName: model.provider.provider.displayName,
+                                         onSummarize: { Task { await model.summarize(moment) } },
                                          onTranscribe: { Task { await model.transcribeSelected() } })
                             .frame(width: min(780, geometry.size.width - 48))
                             .excludesMemoryScrolling().padding(.bottom, 12)
@@ -346,8 +349,11 @@ struct MemoryExplorerView: View {
 
     private func inlineAudio(_ moment: Moment) -> some View {
         MemoryAudioPanel(moment: moment, audio: audio, recorder: model.meeting, transcriptExpanded: $transcriptExpanded,
-            transcriptHeight: 140, framed: false, onTranscribe: { Task { await model.transcribeSelected() } },
+            transcriptHeight: 140, framed: false, summary: model.summaries[moment.id], summarizing: model.summarizing.contains(moment.id),
+            summaryError: model.summaryErrors[moment.id], providerName: model.provider.provider.displayName,
+            onSummarize: { Task { await model.summarize(moment) } }, onTranscribe: { Task { await model.transcribeSelected() } },
             onClose: { expandedAudioID = nil; audio.pause() })
+            .task(id: moment.id) { await model.loadSummary(for: moment.id) }
     }
 
     private var recentSearches: some View {
@@ -374,6 +380,10 @@ struct MemoryExplorerView: View {
                 }.padding(.horizontal, 12).padding(.vertical, 4).modifier(GlassSurface())
                 Spacer()
                 HStack(spacing: 15) {
+                    if let address = model.selection?.url, let url = URL(string: address) {
+                        Button { NSWorkspace.shared.open(url) } label: { Image(systemName: "safari") }
+                            .help("Open \(BrowserAddress.short(address))").accessibilityLabel("Open page \(BrowserAddress.short(address))")
+                    }
                     Button { searchExpanded.toggle(); searchFocused = searchExpanded } label: { Image(systemName: "magnifyingglass") }.help("Search memory")
                     Button {
                         if model.selection?.kind == "meeting" { searchExpanded = false; transcriptExpanded.toggle() }

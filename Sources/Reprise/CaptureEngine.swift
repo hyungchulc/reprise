@@ -16,6 +16,7 @@ final class CaptureEngine: ObservableObject {
     private let store: MomentStore
     private let root: URL
     private let processor = CaptureImageProcessor()
+    private let browser = BrowserURLReader()
     private var loop: Task<Void, Never>?
     private var busy = false
     private var generation = UUID()
@@ -89,16 +90,14 @@ final class CaptureEngine: ObservableObject {
                 status = "Screen Recording permission required"
                 return
             }
-            let before = foregroundContext()
+            let before = activeContext()
             if let reason = privacyReason(before, settings: settings) { skip(reason); return }
             let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
             try Task.checkCancellation()
             guard token == generation, pauseReason(settings: settings) == nil else { return }
-            let window = content.windows.first { $0.owningApplication?.processID == before.pid && $0.windowLayer == 0 }
-            let display = content.displays.first { display in
-                guard let window else { return display.displayID == CGMainDisplayID() }
-                return display.frame.contains(CGPoint(x: window.frame.midX, y: window.frame.midY))
-            } ?? content.displays.first
+            let window = before.windowID.flatMap { id in content.windows.first { $0.windowID == id } }
+            let display = content.displays.first { $0.displayID == before.displayID }
+                ?? content.displays.first { $0.displayID == CGMainDisplayID() } ?? content.displays.first
             guard let display else { throw CaptureFailure("No display available.") }
             // Pause for private titles anywhere on this display, including background windows.
             if content.windows.contains(where: { $0.frame.intersects(display.frame) && isPrivate($0.title ?? "", settings) }) {
@@ -121,20 +120,23 @@ final class CaptureEngine: ObservableObject {
             configuration.queueDepth = 3
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
             guard token == generation, !Task.isCancelled, pauseReason(settings: settings) == nil,
-                  foregroundContext() == before, privacyReason(before, settings: settings) == nil else { skip("Skipped changed context"); return }
+                  activeContext() == before, privacyReason(before, settings: settings) == nil else { skip("Skipped changed context"); return }
             let contextKey = "\(display.displayID)|\(before.pid)|\(before.title)"
+            // Low-density displays draw text with fewer pixels, so their text is read at full size.
             prepared = try await processor.prepare(image: image, root: root, cipher: store.cipher, settings: settings,
                 previousFingerprint: settings.deduplicate && contextKey == lastContext ? lastFingerprint : nil,
-                ignoringTopRows: menuBarRows(display: display, window: window, image: image, pointHeight: filter.contentRect.height))
+                ignoringTopRows: menuBarRows(display: display, window: window, image: image, pointHeight: filter.contentRect.height),
+                textScaleLimit: pixelScale < 1.5 ? 3_840 : 2_400)
             guard let result = prepared else { skip("Recording, unchanged screen"); return }
             guard token == generation, !Task.isCancelled, pauseReason(settings: settings) == nil,
-                  foregroundContext() == before, privacyReason(before, settings: settings) == nil else {
+                  activeContext() == before, privacyReason(before, settings: settings) == nil else {
                 await processor.remove(result, root: root); prepared = nil
                 skip("Skipped changed context"); return
             }
+            let address = settings.recordBrowserAddresses && before.frontmost ? browser.address(bundleID: before.bundleID) : nil
             let moment = Moment(timestamp: result.timestamp, appName: before.name, bundleID: before.bundleID,
                                 windowTitle: before.title, text: result.text, imagePath: result.imagePath,
-                                thumbnailPath: result.thumbnailPath, byteCount: result.byteCount)
+                                thumbnailPath: result.thumbnailPath, byteCount: result.byteCount, url: address)
             try await store.insert(moment)
             prepared = nil
             lastFingerprint = result.fingerprint
@@ -188,13 +190,53 @@ final class CaptureEngine: ObservableObject {
         return nil
     }
 
-    private func foregroundContext() -> CaptureContext {
+    /// The screen in use. Normally that is the display holding the focused window, found in the
+    /// window server's front-to-back order, since ScreenCaptureKit's window list is unordered. When
+    /// the last scroll or click on another display is newer than the last key press, the person is
+    /// working there, such as scrolling a page beside the editor, so that display and the window
+    /// under the pointer are recorded instead. With no window in front, the pointer's display is.
+    private func activeContext() -> CaptureContext {
         let app = NSWorkspace.shared.frontmostApplication
         let pid = app?.processIdentifier ?? 0
-        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        let window = windows.first { ($0[kCGWindowOwnerPID as String] as? Int32) == pid && ($0[kCGWindowLayer as String] as? Int) == 0 }
+        let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? [])
+            .filter { ($0[kCGWindowLayer as String] as? Int) == 0 }
+        func bounds(_ window: [String: Any]) -> CGRect? {
+            (window[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
+        }
+        var count: UInt32 = 0
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        if CGGetActiveDisplayList(16, &ids, &count) != .success { count = 0 }
+        let displays = ids.prefix(Int(count)).map { ($0, CGDisplayBounds($0)) }
+        func display(for rect: CGRect) -> CGDirectDisplayID? {
+            var best: CGDirectDisplayID?, bestArea: CGFloat = 0
+            for (id, frame) in displays {
+                let overlap = frame.intersection(rect)
+                let area: CGFloat = overlap.isNull ? 0 : overlap.width * overlap.height
+                if area > bestArea { best = id; bestArea = area }
+            }
+            return best
+        }
+        let pointer = CGEvent(source: nil)?.location ?? .zero
+        let pointerDisplay = displays.first { $0.1.contains(pointer) }?.0
+        let focused = windows.first { ($0[kCGWindowOwnerPID as String] as? Int32) == pid }
+        let focusDisplay = focused.flatMap(bounds).flatMap(display(for:))
+        let typed = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown)
+        let pointerEvents: [CGEventType] = [.scrollWheel, .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseDragged]
+        let pointed = pointerEvents.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? .infinity
+        let pointerInUse = focusDisplay == nil || pointed + 1 < typed
+        let underPointer = windows.first { bounds($0)?.contains(pointer) == true }
+        let owner = underPointer?[kCGWindowOwnerPID as String] as? Int32
+        if displays.count > 1, let pointerDisplay, pointerDisplay != focusDisplay, pointerInUse,
+           let window = underPointer, let owner, owner != pid,
+           let other = NSRunningApplication(processIdentifier: owner), other.activationPolicy == .regular {
+            return CaptureContext(pid: owner, name: other.localizedName ?? "Unknown app", bundleID: other.bundleIdentifier ?? "",
+                                  title: window[kCGWindowName as String] as? String ?? "",
+                                  windowID: window[kCGWindowNumber as String] as? CGWindowID, displayID: pointerDisplay, frontmost: false)
+        }
         return CaptureContext(pid: pid, name: app?.localizedName ?? "Unknown app", bundleID: app?.bundleIdentifier ?? "",
-                              title: window?[kCGWindowName as String] as? String ?? "")
+                              title: focused?[kCGWindowName as String] as? String ?? "",
+                              windowID: focused?[kCGWindowNumber as String] as? CGWindowID,
+                              displayID: focusDisplay ?? pointerDisplay ?? CGMainDisplayID(), frontmost: true)
     }
 
     private func privacyReason(_ context: CaptureContext, settings: CaptureSettings) -> String? {
@@ -219,4 +261,8 @@ private struct CaptureContext: Equatable {
     let name: String
     let bundleID: String
     let title: String
+    let windowID: CGWindowID?
+    let displayID: CGDirectDisplayID
+    /// The app is the one in front, not a window under the pointer on another display.
+    let frontmost: Bool
 }

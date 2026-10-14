@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import RepriseCore
+import UserNotifications
 
 @main
 struct RepriseApp: App {
@@ -9,16 +10,38 @@ struct RepriseApp: App {
     init() {
         if CommandLine.arguments.dropFirst() == ["--check-package"] { PackageCheck.run() }
         if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--check-vault" { VaultCheck.run(path: CommandLine.arguments[2]) }
-        do { let instance = try AppModel(); _model = StateObject(wrappedValue: instance); AppRuntime.model = instance }
-        catch {
-            // A missing key or a refused keychain read must not become a crash loop.
+        let instance = Self.openLibrary()
+        _model = StateObject(wrappedValue: instance); AppRuntime.model = instance
+    }
+
+    /// A missing key or a refused keychain read must not become a crash loop. When the keychain has
+    /// no key for an encrypted library, a recovery key can put it back.
+    private static func openLibrary() -> AppModel {
+        var failure: Error
+        do { return try AppModel() } catch { failure = error }
+        while true {
             let alert = NSAlert()
             alert.alertStyle = .critical
             alert.messageText = "Reprise could not open its library"
-            alert.informativeText = error.localizedDescription
+            alert.informativeText = failure.localizedDescription
+            guard let keyFailure = failure as? VaultKeychain.Failure ?? (failure as? RecoveryKey.Failure).map({ _ in .missing }),
+                  case .missing = keyFailure else {
+                alert.addButton(withTitle: "Quit")
+                alert.runModal()
+                exit(1)
+            }
+            alert.informativeText += "\n\nIf you saved this library's recovery key, paste it below to open the library on this Mac."
+            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 380, height: 24))
+            field.placeholderString = "R1-XXXXX-XXXXX-..."
+            alert.accessoryView = field
+            alert.addButton(withTitle: "Enter Recovery Key")
             alert.addButton(withTitle: "Quit")
-            alert.runModal()
-            exit(1)
+            alert.window.initialFirstResponder = field
+            guard alert.runModal() == .alertFirstButtonReturn else { exit(1) }
+            do {
+                try AppModel.restoreLibraryKey(field.stringValue)
+                return try AppModel()
+            } catch { failure = error }
         }
     }
     var body: some Scene {
@@ -48,7 +71,7 @@ struct RepriseApp: App {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     var explorer: MemoryOverlayController?
     private var observer: NSObjectProtocol?
     private var closeObserver: NSObjectProtocol?
@@ -60,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationTask: Task<Void, Never>?
     private var terminationReady = false
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().delegate = self
         guard let model = AppRuntime.model else { return }
         model.updater.prepareForRelaunch = { [weak model] in
             guard let model else { return }
@@ -92,6 +116,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await model.start() }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// A meeting summary notification opens that recording.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
+        let id = response.notification.request.content.userInfo["momentID"] as? String
+        Task { @MainActor in
+            if let id { await AppRuntime.model?.openMemory(id: id) }
+            completionHandler()
+        }
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
+    }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { explorer?.show(); return false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if terminationReady { return .terminateNow }
