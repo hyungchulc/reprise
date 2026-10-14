@@ -80,7 +80,7 @@ struct RepriseApp: App {
                 Button("Next Frame") { model.step(-1) }.keyboardShortcut(.rightArrow, modifiers: [.option])
                 Button("Latest") { Task { model.dayFilter = nil; await model.reload() } }.keyboardShortcut("l", modifiers: [.command, .shift])
             }
-            CommandMenu("Audio") { AudioMenuItems(model: model, meeting: model.meeting, captions: model.captions) }
+            CommandMenu("Audio") { AudioMenuItems(model: model, meeting: model.meeting, captions: model.captions, assistant: model.assistant) }
         }
     }
 }
@@ -210,7 +210,7 @@ struct MenuBarContent: View {
         Divider()
         Text(capture.status)
         Button(capture.isRecording ? "Pause Recording" : "Start Recording") { Task { await model.toggleRecording() } }
-        AudioMenuItems(model: model, meeting: model.meeting, captions: model.captions)
+        AudioMenuItems(model: model, meeting: model.meeting, captions: model.captions, assistant: model.assistant)
         Divider()
         Button("Settings...") { NotificationCenter.default.post(name: .repriseOpenMemory, object: nil); model.showSettings = true }
         Button("Check for Updates...") { model.updater.check() }.disabled(!model.updater.canCheck)
@@ -219,16 +219,19 @@ struct MenuBarContent: View {
     }
 }
 
-/// Meeting recording and live captions, in the menu bar menu and the app's Audio menu.
+/// Meeting recording, the meeting assistant and live captions, in the menu bar menu and the app's Audio menu.
 struct AudioMenuItems: View {
     @ObservedObject var model: AppModel
     @ObservedObject var meeting: MeetingRecorder
     @ObservedObject var captions: LiveCaptions
+    @ObservedObject var assistant: MeetingAssistant
     var body: some View {
         Button(meeting.isRecording ? "Stop Meeting Recording" : "Record Meeting") {
             NotificationCenter.default.post(name: .repriseOpenMemory, object: nil)
             Task { await model.toggleMeeting() }
         }.disabled(meeting.isBusy)
+        Toggle("Meeting Assistant", isOn: Binding(get: { assistant.isRunning }, set: { _ in Task { await model.toggleAssistant() } }))
+        Button("Answer Last Question") { Task { await model.answerLastQuestion() } }.disabled(!assistant.isRunning)
         Toggle("Live Captions", isOn: Binding(get: { captions.isRunning }, set: { _ in Task { await model.toggleCaptions() } }))
         Button("Move Captions...") { model.moveCaptions() }
     }

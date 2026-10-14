@@ -6,13 +6,13 @@ import RepriseCore
 
 private enum SettingsPage: String, CaseIterable, Identifiable {
     case general = "General", appearance = "Appearance", screen = "Screen Recording", audio = "Audio & Meetings"
-    case captions = "Live Captions", privacy = "Privacy", models = "AI & Models", storage = "Storage", usage = "Usage & Performance"
+    case assistant = "Meeting Assistant", captions = "Live Captions", privacy = "Privacy", models = "AI & Models", storage = "Storage", usage = "Usage & Performance"
     case mcp = "MCP & Integrations"
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .general: "gearshape"; case .appearance: "paintpalette"; case .screen: "record.circle"
-        case .audio: "waveform"; case .captions: "captions.bubble"; case .privacy: "hand.raised"; case .models: "sparkles"
+        case .audio: "waveform"; case .assistant: "bubble.left.and.text.bubble.right"; case .captions: "captions.bubble"; case .privacy: "hand.raised"; case .models: "sparkles"
         case .storage: "internaldrive"; case .usage: "chart.bar"
         case .mcp: "puzzlepiece.extension"
         }
@@ -49,6 +49,7 @@ struct SettingsView: View {
                     case .appearance: AppearanceSettings(model: model)
                     case .screen: screen
                     case .audio: audio
+                    case .assistant: AssistantSettings(model: model, assistant: model.assistant)
                     case .captions: CaptionSettings(model: model, captions: model.captions)
                     case .privacy: privacy
                     case .models: AISettings(model: model)
@@ -92,7 +93,9 @@ struct SettingsView: View {
             ShortcutSettings(shortcut: model.searchOnlyShortcut, title: "Search Only")
             ShortcutSettings(shortcut: model.captionsShortcut, title: "Live Captions")
             ShortcutSettings(shortcut: model.meetingShortcut, title: "Record Meeting")
-            Text("These work in every app, also over full-screen video. Search Only opens just the search box; opening a memory from it shows the full view. Live Captions and Record Meeting turn on with one press and off with the next.")
+            ShortcutSettings(shortcut: model.assistantShortcut, title: "Meeting Assistant")
+            ShortcutSettings(shortcut: model.answerShortcut, title: "Answer Last Question")
+            Text("These work in every app, also over full-screen video. Search Only opens just the search box; opening a memory from it shows the full view. Live Captions, Record Meeting and Meeting Assistant turn on with one press and off with the next. Answer Last Question answers what the others asked last, and opens the assistant first when it is closed.")
                 .foregroundStyle(.secondary).repriseFont(.caption)
         }
         Section("Reprise") {

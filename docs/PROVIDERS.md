@@ -281,6 +281,41 @@ Captions keep the last 600 characters, start a new line after a sentence, and cl
 six quiet seconds. Lines wrap by estimated width, a wide character such as Hangul counting
 as about one em. Captions are not stored.
 
+## Meeting assistant
+
+The assistant listens with two lanes of the same live speech code as captions, without
+translation: the microphone as You and Mac audio as Them. OpenAI listens with a
+`gpt-live-transcribe` transcription session per lane; this Mac listens with SpeechAnalyzer in
+the language chosen in Settings > Meeting Assistant, or else the first transcription
+language, which then guides only this Mac. A line closes at a sentence end or after 1.5
+quiet seconds, and a Them line ending in `?` or `？` is a question. About 400 lines stay in
+memory; nothing is stored.
+
+- **OpenAI answers.** When the assistant opens, Reprise mints a client secret for
+  `session.type = "realtime"`, `model = "gpt-realtime"`, `output_modalities = ["text"]`,
+  its instructions and one `search_memory` function tool, and opens
+  `wss://api.openai.com/v1/realtime?model=gpt-realtime`, so the first question starts
+  answering at once. Each question is a `conversation.item.create` user message carrying
+  the last four minutes of the transcript (at most 6,000 characters), followed by
+  `response.create` with `tool_choice: "required"`, so every answer starts with a memory
+  search. `response.function_call_arguments.done` runs the search on this Mac; its result
+  returns as a `function_call_output` item and another `response.create` follows.
+  `response.output_text.delta` streams the answer. The session keeps the last two
+  exchanges for follow-ups and deletes older items with `conversation.item.delete`. One
+  question is answered at a time; a typed one goes before one heard. The ChatGPT sign-in
+  works here, where the Responses API refuses it for lack of the `api.responses.write`
+  scope.
+- **Memory search.** Each search term goes to the local full-text index; a phrase with no
+  match is searched again by its words of three or more characters at a lower weight.
+  Repeats of one app and title within five minutes collapse. Up to six excerpts of at most
+  700 characters return with labels M1, M2 and on, which keep counting through the meeting.
+  An answer's sources are the labels it names, or else the first three found.
+- **Provider answers.** The provider chosen in AI & Models answers through the same
+  contract as search, with the transcript as the first source and up to six memories found
+  by the question's four longest words.
+- **Automatic** asks OpenAI first. When OpenAI cannot start, the provider answers, and
+  OpenAI is tried again two minutes later.
+
 ## Semantic search
 
 `MemorySearch.search(question:configuration:filter:timeZone:conversation:)` first

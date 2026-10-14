@@ -32,6 +32,13 @@ final class AppModel: ObservableObject {
     let meetingShortcut = GlobalShortcut(storageKey: "meetingShortcut", identifier: 4, standard: nil)
     /// Live captions over the screen, translated as they are heard.
     let captions = LiveCaptions()
+    /// Opens the meeting assistant, and answers the last question the others asked. Neither has a default.
+    let assistantShortcut = GlobalShortcut(storageKey: "assistantShortcut", identifier: 5, standard: nil)
+    let answerShortcut = GlobalShortcut(storageKey: "answerShortcut", identifier: 6, standard: nil)
+    /// Listens to a meeting and answers questions fast.
+    let assistant: MeetingAssistant
+    /// The assistant opened with a meeting recording and closes when it stops.
+    private var assistantOpenedByMeeting = false
     /// The overlay shows only the search box until a memory is opened from it.
     @Published var searchOnly = false
     let speechLanguages = SpeechLanguages()
@@ -121,6 +128,12 @@ final class AppModel: ObservableObject {
             if captions.isRunning, preferences.captions.listening != oldValue.captions.listening || preferences.openAIAccess != oldValue.openAIAccess {
                 Task { await startCaptions() }
             }
+            // Answer settings apply to the next question; a different way of listening starts over.
+            assistant.preferences = preferences.assistant
+            if assistant.isRunning, preferences.assistant.listeningKey != oldValue.assistant.listeningKey
+                || preferences.assistant.useMemories != oldValue.assistant.useMemories || preferences.openAIAccess != oldValue.openAIAccess {
+                Task { await startAssistant() }
+            }
         }
     }
     @Published private(set) var archiveStatus: String?
@@ -158,6 +171,7 @@ final class AppModel: ObservableObject {
         if store.convertedFromPlaintext { try? MCPAccess.adoptUnsigned(root: root, keys: keys) }
         capture = CaptureEngine(store: store, root: root)
         meeting = MeetingRecorder(store: store, root: root, languages: speechLanguages, speechModels: speechModels)
+        assistant = MeetingAssistant(store: store, ai: ai)
         archiver = FrameArchiver(store: store, root: root)
         searchHistory = SearchHistory.load(root: root, cipher: keys.cipher)
         let defaults = UserDefaults.standard
@@ -210,6 +224,19 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.timeZone = .autoupdatingCurrent; await self?.reload() }
         }.store(in: &subscriptions)
         captions.style = preferences.captions
+        assistant.preferences = preferences.assistant
+        // The assistant a recording opened closes with it, however the recording ends.
+        meeting.$isRecording.removeDuplicates().sink { [weak self] recording in
+            guard let self, !recording, self.assistantOpenedByMeeting else { return }
+            self.assistantOpenedByMeeting = false
+            self.assistant.stop()
+        }.store(in: &subscriptions)
+        // Like meeting recordings, live listening never resumes by itself after the Mac sleeps or the user switches away.
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
+            NSWorkspace.shared.notificationCenter.publisher(for: name).sink { [weak self] _ in
+                Task { @MainActor in self?.stopListening() }
+            }.store(in: &subscriptions)
+        }
     }
 
     func start() async {
@@ -602,6 +629,10 @@ final class AppModel: ObservableObject {
         await meeting.start(title: meetingDetector.candidate?.title ?? "Meeting", includeSystemAudio: preferences.includeSystemAudio,
                             transcribe: preferences.transcribeMeetings, request: transcriptionRequest())
         if !meeting.isRecording, let message = meeting.lastError { error = message }
+        if meeting.isRecording, preferences.assistant.openWithMeetings, !assistant.isRunning {
+            await startAssistant()
+            assistantOpenedByMeeting = true
+        }
     }
 
     /// Turns live captions on or off.
@@ -620,6 +651,32 @@ final class AppModel: ObservableObject {
 
     /// Shows the captions to drag into place, also before they start.
     func moveCaptions() { captions.moving = true }
+
+    /// Stops live captions and the meeting assistant.
+    func stopListening() {
+        if captions.isRunning { captions.stop() }
+        if assistant.isRunning { assistant.stop(); assistantOpenedByMeeting = false }
+    }
+
+    /// Opens or closes the meeting assistant.
+    func toggleAssistant() async {
+        if assistant.isRunning { assistant.stop(); assistantOpenedByMeeting = false } else { await startAssistant() }
+    }
+
+    /// Starts the assistant, after asking for the microphone and for Mac audio.
+    func startAssistant() async {
+        await permissions.request(.microphone)
+        if !CGPreflightScreenCaptureAccess() { await permissions.request(.screenCapture) }
+        let provider = { [weak self] in self?.provider ?? AIProviderConfiguration() }
+        assistant.start(preferences.assistant, meetingLanguages: preferences.speechLocales, access: preferences.openAIAccess,
+                        codexPath: codexPath, provider: provider, languages: speechLanguages)
+    }
+
+    /// Answers the last question the others asked, opening the assistant first when it is closed.
+    func answerLastQuestion() async {
+        if !assistant.isRunning { await startAssistant(); return }
+        assistant.answerLast()
+    }
 
     /// The settings a transcription starts with; `engine` picks another engine for this one time.
     func transcriptionRequest(_ engine: TranscriptionEngine? = nil) -> TranscriptionRequest {

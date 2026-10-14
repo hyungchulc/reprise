@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.0-alpha.3
+
+- **Meeting assistant.** A small window beside the meeting hears you through the
+  microphone and the others through Mac audio, writes down what each side says, and
+  answers when the others ask a question: about a second after the question, from what
+  was said and from your memories, with buttons that open the memories it used. Type
+  your own question in the window, or answer the last question with a shortcut. The
+  window floats over other apps, also full-screen ones, without taking focus. What the
+  assistant hears is not saved.
+- **Fast answers with OpenAI, or with any provider.** With the ChatGPT plan of the Codex
+  CLI on this Mac or an OpenAI API key, OpenAI's Realtime model answers as text and
+  searches your memories while it answers. Without OpenAI, the provider chosen in AI &
+  Models answers from the conversation and the memories that match the question's
+  words; with Apple's on-device model or Ollama, nothing leaves the Mac. On macOS 26 the
+  assistant can also listen on this Mac.
+- **Open it how you work.** Settings > Meeting Assistant can open it with every meeting
+  recording and close it when the recording stops. Settings > General > Shortcuts sets
+  shortcuts for Meeting Assistant and Answer Last Question, and the menu bar menu and
+  the Audio menu have both commands.
+- **Live listening stops when the Mac sleeps.** Like meeting recordings, live captions
+  and the assistant stop when the Mac sleeps or you switch users, so the microphone never
+  comes back on by itself.
+- Live Captions settings list the spoken languages also when OpenAI makes the captions.
+
 ## 0.9.0-alpha.2
 
 - **Live captions.** Reprise listens to what the Mac plays, or to the microphone, and

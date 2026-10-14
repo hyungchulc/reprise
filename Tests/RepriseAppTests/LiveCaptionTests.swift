@@ -18,11 +18,11 @@ final class LiveCaptionTests: XCTestCase {
         preferences.target = "ko"
         preferences.spoken = "sv-SE"
         XCTAssertEqual(preferences.translationTarget, "ko")
-        XCTAssertTrue(LiveCaptions.openAISession(preferences).translation)
+        XCTAssertTrue(LiveSpeech.openAISession(LiveCaptions.speechSettings(preferences)).translation)
         preferences.target = "sv"
         XCTAssertNil(preferences.translationTarget)
         preferences.target = ""
-        let (session, translation) = LiveCaptions.openAISession(preferences)
+        let (session, translation) = LiveSpeech.openAISession(LiveCaptions.speechSettings(preferences))
         XCTAssertFalse(translation)
         let input = (session["audio"] as? [String: Any])?["input"] as? [String: Any]
         XCTAssertEqual((input?["transcription"] as? [String: Any])?["language"] as? String, "sv")
@@ -45,7 +45,7 @@ final class LiveCaptionTests: XCTestCase {
             preferences.target = target
             preferences.spoken = "sv-SE"
             preferences.showOriginal = true
-            let (session, translation) = LiveCaptions.openAISession(preferences)
+            let (session, translation) = LiveSpeech.openAISession(LiveCaptions.speechSettings(preferences))
             let secret = try await OpenAIRealtime.clientSecret(credential, session: session, translation: translation)
             let socket = OpenAIRealtime.connect(secret: secret, translation: translation)
             let append = translation ? "session.input_audio_buffer.append" : "input_audio_buffer.append"
@@ -54,7 +54,7 @@ final class LiveCaptionTests: XCTestCase {
             let started = Date()
             var sender: Task<Void, Never>?
             for try await event in socket.events {
-                switch LiveCaptions.openAIEvent(event) {
+                switch LiveSpeech.openAIEvent(event) {
                 case .ready:
                     // Twice real time in 100 ms frames, then silence, then a few seconds for the last words.
                     sender = Task.detached {

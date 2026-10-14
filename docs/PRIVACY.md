@@ -74,7 +74,10 @@ on this Mac by a speaker model downloaded the same way. These models are kept in
 sealed file without a plaintext copy. OpenAI transcription sends the recording's audio to
 OpenAI (see below). Live captions hear what the Mac plays, without Reprise's own sounds,
 or the microphone, only while they are on; they are shown and never saved, and Reprise's
-own windows, captions included, are left out of screen capture. Meeting detection
+own windows, captions included, are left out of screen capture. The meeting assistant
+hears the microphone and what the Mac plays only while its window is open; what it hears is
+shown and never saved. Live captions and the assistant stop when the Mac sleeps or the user
+session switches, and never resume by themselves. Meeting detection
 only offers a prompt. Reprise excludes itself from screen capture and supports
 app/title exclusions, idle/battery pauses and retention limits.
 
@@ -94,6 +97,9 @@ and deletion cannot remove copies held by backups or external services.
 | Whisper and speaker models, when chosen | Download requests to Hugging Face; recordings stay on the Mac |
 | Live captions by OpenAI, when chosen | What the Mac plays, or the microphone, while captions are on, streamed to OpenAI's Realtime API with a short-lived session secret made the same way |
 | Live captions on this Mac | Nothing leaves the Mac; speech and translation models download once from Apple |
+| Meeting assistant listening by OpenAI, when chosen | The microphone and what the Mac plays, while the assistant is open, streamed to OpenAI's Realtime API with a short-lived session secret made the same way |
+| Meeting assistant answers by OpenAI, when chosen | Each question, the last four minutes of the assistant's transcript and the memory excerpts its searches return, to OpenAI's Realtime API |
+| Meeting assistant answers by a provider | Each question, the last four minutes of the transcript and up to six matching memories, to the provider chosen in AI & Models |
 | Apple Intelligence, Ollama | Nothing leaves the Mac; Ollama is reached only on 127.0.0.1 |
 | MCP text tools | Requested OCR/transcripts/metadata to the connected client, which may transmit them onward |
 | MCP screenshots | Bounded screenshot previews only when screenshot sharing is explicitly enabled |
@@ -109,8 +115,8 @@ For OpenAI transcription with a ChatGPT plan, Reprise asks the Codex CLI's own a
 for its access token each time, keeps it in memory and sends it only to api.openai.com to
 start a session; it is never written or logged, and Reprise never reads Codex's files. An
 OpenAI API key, when saved, stays in the login keychain as “Reprise API Key (OpenAI)” and is
-sent only to api.openai.com. Audio leaves the Mac only with OpenAI transcription and OpenAI
-live captions.
+sent only to api.openai.com. Audio leaves the Mac only with OpenAI transcription, OpenAI
+live captions and the meeting assistant listening with OpenAI.
 
 In-app AI search does not send image/audio bytes. MCP does not return raw audio and
 does not invoke another model itself. Reprise does not implement its own analytics

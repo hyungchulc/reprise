@@ -18,6 +18,7 @@ final class MemoryOverlayController {
     private var previousPresentation: NSApplication.PresentationOptions?
     private var configuredScreenFrame: NSRect?
     private var captionWindow: CaptionWindowController?
+    private var assistantPanel: AssistantPanelController?
     /// When each on-and-off shortcut last acted; one press can arrive as a hotkey and as a key event.
     private var lastToggle: [UInt32: Date] = [:]
 
@@ -72,6 +73,11 @@ final class MemoryOverlayController {
         model.captionsShortcut.activate()
         model.meetingShortcut.onTrigger = { [weak self] in self?.toggleOnce(4) { await $0.toggleMeeting(announce: true) } }
         model.meetingShortcut.activate()
+        assistantPanel = AssistantPanelController(model: model)
+        model.assistantShortcut.onTrigger = { [weak self] in self?.toggleOnce(5) { await $0.toggleAssistant() } }
+        model.assistantShortcut.activate()
+        model.answerShortcut.onTrigger = { [weak self] in self?.toggleOnce(6) { await $0.answerLastQuestion() } }
+        model.answerShortcut.activate()
         events = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             // Local key equivalents can arrive without Carbon's global hotkey event.
@@ -86,6 +92,12 @@ final class MemoryOverlayController {
             }
             if event.type == .keyDown, self.model.meetingShortcut.matches(event) {
                 self.toggleOnce(4) { await $0.toggleMeeting(announce: true) }; return nil
+            }
+            if event.type == .keyDown, self.model.assistantShortcut.matches(event) {
+                self.toggleOnce(5) { await $0.toggleAssistant() }; return nil
+            }
+            if event.type == .keyDown, self.model.answerShortcut.matches(event) {
+                self.toggleOnce(6) { await $0.answerLastQuestion() }; return nil
             }
             guard event.window === self.panel else { return event }
             if event.type == .keyDown, event.keyCode == 53, self.panel.attachedSheet == nil {

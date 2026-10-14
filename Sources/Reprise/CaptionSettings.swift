@@ -44,6 +44,7 @@ struct CaptionSettings: View {
             Text("Detect automatically").tag("")
             ForEach(device.spokenLanguages(including: style.spoken)) { Text($0.name).tag($0.id) }
         }
+        .task { await device.load() }
         Picker("Captions in", selection: $model.preferences.captions.target) {
             Text("The spoken language").tag("")
             ForEach(CaptionLanguage.targets(including: style.target)) { Text($0.name).tag($0.id) }
@@ -138,12 +139,15 @@ final class OnDeviceCaptions: ObservableObject {
         languages = ids.map(CaptionLanguage.named).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    func check(_ style: CaptionPreferences) async {
-        guard #available(macOS 26, *), !style.spoken.isEmpty else { return }
-        let locale = Locale(identifier: style.spoken)
-        let name = Locale.current.localizedString(forIdentifier: style.spoken) ?? style.spoken
+    func check(_ style: CaptionPreferences) async { await check(spoken: style.spoken, target: style.translationTarget) }
+
+    /// Checks recognition of `spoken`, and translation into `target` when there is one.
+    func check(spoken: String, target: String?) async {
+        guard #available(macOS 26, *), !spoken.isEmpty else { return }
+        let locale = Locale(identifier: spoken)
+        let name = Locale.current.localizedString(forIdentifier: spoken) ?? spoken
         recognition = await Self.recognition(locale, name: name)
-        guard let target = style.translationTarget else { translation = .notNeeded; return }
+        guard let target else { translation = .notNeeded; return }
         switch await LanguageAvailability().status(from: locale.language, to: Locale.Language(identifier: target)) {
         case .installed: translation = .ready
         case .supported: translation = .needsDownload
@@ -197,13 +201,15 @@ private struct OnDeviceCaptionStatus: View {
     }
 }
 
-private struct AvailabilityText: View {
+struct AvailabilityText: View {
     let availability: OnDeviceCaptions.Availability
+    /// When a download starts by itself.
+    var starting = "captions start"
     var body: some View {
         switch availability {
         case .checking: ProgressView().controlSize(.small)
         case .ready: Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-        case .downloadsOnStart: Text("Downloads when captions start").foregroundStyle(.secondary)
+        case .downloadsOnStart: Text("Downloads when \(starting)").foregroundStyle(.secondary)
         case .needsDownload: Text("Not downloaded").foregroundStyle(.orange)
         case .notNeeded: Text("Not needed").foregroundStyle(.secondary)
         case .unavailable(let message): Text(message).foregroundStyle(.orange).lineLimit(3)

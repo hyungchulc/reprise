@@ -39,6 +39,7 @@ struct AppPreferences: Codable, Equatable {
     /// Finds who spoke when, on this Mac, and names each voice in the transcript.
     var speakerLabels = false
     var captions = CaptionPreferences()
+    var assistant = AssistantPreferences()
 
     init() {}
 
@@ -74,6 +75,7 @@ struct AppPreferences: Codable, Equatable {
         whisperModel = values.value(.whisperModel, default: defaults.whisperModel)
         speakerLabels = values.value(.speakerLabels, default: defaults.speakerLabels)
         captions = values.value(.captions, default: defaults.captions)
+        assistant = values.value(.assistant, default: defaults.assistant)
     }
 
     var colorScheme: ColorScheme? { followSystemAppearance ? nil : (darkMode ? .dark : .light) }

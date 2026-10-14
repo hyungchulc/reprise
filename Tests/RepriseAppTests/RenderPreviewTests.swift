@@ -62,6 +62,42 @@ final class RenderPreviewTests: XCTestCase {
         try render(captions, to: URL(fileURLWithPath: folder).appendingPathComponent("captions-overlay.png"))
     }
 
+    @MainActor func testRenderAssistantViewsWhenRequested() async throws {
+        guard let folder = ProcessInfo.processInfo.environment["REPRISE_RENDER"] else { throw XCTSkip("Set REPRISE_RENDER to a folder to render previews.") }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-render-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = NSApplication.shared
+        let model = try AppModel(root: root, keys: testKeys, models: root.appendingPathComponent("Models"))
+        for (listening, answers) in [(CaptionEngine.automatic, AssistantAnswerEngine.automatic), (.onDevice, .provider)] {
+            model.preferences.assistant.listening = listening
+            model.preferences.assistant.answers = answers
+            let form = Form { AssistantSettings(model: model, assistant: model.assistant) }.formStyle(.grouped).frame(width: 592, height: 1250)
+            try render(form, to: URL(fileURLWithPath: folder).appendingPathComponent("assistant-\(listening.rawValue)-\(answers.rawValue).png"))
+        }
+        typealias Line = MeetingAssistant.Line
+        var lines = [Line(speaker: .them, text: "Thanks for joining. Let's go through the launch plan."),
+                     Line(speaker: .you, text: "Sure, I have the latest timeline open."),
+                     Line(speaker: .them, text: "Quick question. When is the Orion launch now?"),
+                     Line(speaker: .you, text: "네, 잠깐만요. 확인해 볼게요")]
+        for index in 0..<3 { lines[index].final = true }
+        var answered = MeetingAssistant.Answer(question: "Quick question. When is the Orion launch now?", automatic: true)
+        answered.text = "Orion now launches on November 12 [M1], moved from November 5 after the security review [M2]."
+        answered.state = .done
+        let slack = Moment(id: "m1", appName: "Slack", windowTitle: "#orion - Launch moved to November 12", text: "", kind: "screen")
+        let notes = Moment(id: "m2", appName: "Notes", windowTitle: "Orion security review", text: "", kind: "screen")
+        answered.sources = [("M1", slack), ("M2", notes)]
+        var searching = MeetingAssistant.Answer(question: "Who owns the security review?", automatic: false)
+        searching.state = .searching("security review, owner")
+        model.assistant.preview(lines: lines, answers: [answered, searching], heardBy: [.you: "OpenAI", .them: "OpenAI"])
+        let panel = AssistantView(model: model, assistant: model.assistant).frame(width: 380, height: 560)
+        try render(panel, to: URL(fileURLWithPath: folder).appendingPathComponent("assistant-panel.png"))
+        model.assistant.preview(lines: [], answers: [], heardBy: [:])
+        try render(AssistantView(model: model, assistant: model.assistant).frame(width: 380, height: 560),
+                   to: URL(fileURLWithPath: folder).appendingPathComponent("assistant-panel-empty.png"))
+        model.assistant.stop()
+    }
+
     /// The floating caption panel: shown while captions run, click-through, draggable only while moving.
     @MainActor func testCaptionPanelFollowsCaptionsWhenRequested() async throws {
         guard let folder = ProcessInfo.processInfo.environment["REPRISE_RENDER"] else { throw XCTSkip("Set REPRISE_RENDER to a folder to render previews.") }

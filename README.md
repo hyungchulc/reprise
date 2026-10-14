@@ -65,10 +65,11 @@ downloaded-installation test on every supported macOS version.
 | Search | Local keyword search that also matches Korean words with particles, AI query planning, source-linked answers, follow-up questions, saved conversations |
 | Meetings | Explicit microphone recording, optional system audio, post-recording transcription with Apple's models or Whisper on your Mac, or OpenAI's newest models with a ChatGPT plan or API key, on-device speaker labels you can rename, automatic summaries with decisions and action items, inline playback and timestamp seeking |
 | Live captions | Captions over every app and full-screen video for what the Mac plays or the microphone, translated as they are spoken, by OpenAI with a ChatGPT plan or API key or on this Mac with Apple's speech and translation models on macOS 26; text size, color, background, lines and position |
+| Meeting assistant | A floating window that hears you and the others, answers the others' questions within about a second from the conversation and your memories with source links, and takes typed questions; OpenAI's Realtime model with a ChatGPT plan or API key, or any AI & Models provider; listening on this Mac on macOS 26 |
 | AI providers | Claude, Codex, Gemini, Grok, Cursor and OpenCode (free models) through their CLIs; Apple's on-device model and Ollama on your Mac; install and sign-in from Settings, model, thinking-level and Fast mode controls in search, a context window choice for Claude and Grok, and reported token and context use |
 | MCP | Opt-in read-only memory search for Claude Desktop, Claude Code, Codex, Cursor and compatible local clients |
 | Appearance | System/custom accent, system/manual light and dark modes, text size, transitions and optional edge glow |
-| Controls | Editable global shortcuts for the memory overlay, search alone, live captions and meeting recording, Dock/menu bar placement, launch options, pause reminders, exclusions and retention |
+| Controls | Editable global shortcuts for the memory overlay, search alone, live captions, meeting recording, the meeting assistant and answering the last question, Dock/menu bar placement, launch options, pause reminders, exclusions and retention |
 | Updates | Sparkle checks a signed feed and downloads signed archives from GitHub Releases |
 
 The default shortcut is **Command + Shift + Space**. It opens focused search in
@@ -121,7 +122,7 @@ timeouts and bounded output. Unsupported CLI contracts fail closed. These contro
 reduce agent side effects; they are not a guarantee that a third-party executable
 is trustworthy. Remaining subscription quota is shown as unknown when unavailable. Private Cloud
 Compute is not available to third-party apps. An OpenAI API key can be used for
-transcription and live captions; search and summaries do not take API keys yet. See [provider contracts](docs/PROVIDERS.md).
+transcription, live captions and the meeting assistant; search and summaries do not take API keys yet. See [provider contracts](docs/PROVIDERS.md).
 
 ## MCP Connections
 
@@ -189,6 +190,17 @@ On macOS 26, this Mac captions with Apple's speech recognition and translation o
 spoken language is chosen, without sending audio anywhere; Settings shows which languages
 this Mac can recognize and translate. Automatic uses OpenAI when its account works and this
 Mac otherwise. Captions are shown, not saved.
+
+The meeting assistant opens a small window beside the meeting from the Reprise menu, a
+shortcut, or with every meeting recording when **Settings > Meeting Assistant** says so. It
+hears you through the microphone and the others through Mac audio and writes down what each
+side says. When the others ask a question, it answers about a second later from the
+conversation and your memories, with buttons that open each memory it used; type a question
+of your own, or press the Answer Last Question shortcut. OpenAI's Realtime model answers
+fastest, with the ChatGPT plan of the Codex CLI or an OpenAI API key; without OpenAI, the
+provider chosen in AI & Models answers, and Apple's on-device model or Ollama keep everything
+on this Mac. What the assistant hears is not saved; record the meeting to keep a transcript.
+Live captions and the assistant stop when the Mac sleeps.
 
 ## Updates
 
