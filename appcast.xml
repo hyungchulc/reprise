@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Reprise</title>
         <item>
+            <title>0.9.0-alpha.7</title>
+            <pubDate>Wed, 14 Oct 2026 14:03:18 +0200</pubDate>
+            <link>https://github.com/hyungchulc/reprise</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/hyungchulc/reprise/releases/tag/v0.9.0-alpha.7</sparkle:fullReleaseNotesLink>
+            <sparkle:version>20261014120257</sparkle:version>
+            <sparkle:shortVersionString>0.9.0-alpha.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/hyungchulc/reprise/releases/download/v0.9.0-alpha.7/Reprise-0.9.0-alpha.7-arm64.zip" length="13250943" type="application/octet-stream" sparkle:edSignature="Lug55YsTpoiotgMqUBPUhiurEEfqRaTSZBaPT1/7PyEOOSDgPZgXZ1o2wbv8TF8mrUepZy6Yck/asDwlVfA5CA=="/>
+        </item>
+        <item>
             <title>0.9.0-alpha.6</title>
             <pubDate>Wed, 14 Oct 2026 10:51:46 +0200</pubDate>
             <link>https://github.com/hyungchulc/reprise</link>
@@ -27,20 +38,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <enclosure url="https://github.com/hyungchulc/reprise/releases/download/v0.9.0-alpha.5/Reprise-0.9.0-alpha.5-arm64.zip" length="13119968" type="application/octet-stream" sparkle:edSignature="F5Es92I0hQVy0N2L0GWGUGHvy9dOtKrt9Oz7Kjc+8OJ1D9/8CP3+6EL4aF7v8mpYYuRmmpR47j373/n4NLkWBA=="/>
         </item>
-        <item>
-            <title>0.9.0-alpha.4</title>
-            <pubDate>Wed, 14 Oct 2026 09:31:59 +0200</pubDate>
-            <link>https://github.com/hyungchulc/reprise</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/hyungchulc/reprise/releases/tag/v0.9.0-alpha.4</sparkle:fullReleaseNotesLink>
-            <sparkle:version>20261014073145</sparkle:version>
-            <sparkle:shortVersionString>0.9.0-alpha.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/hyungchulc/reprise/releases/download/v0.9.0-alpha.4/Reprise-0.9.0-alpha.4-arm64.zip" length="11582469" type="application/octet-stream" sparkle:edSignature="OTjsfuf07u+RwOZbeIuvLyBs9Vec6UrRKNUE+8WGYLZmwPYOIBldUTs07BCDTT9XRGqKdYGrtWkxs1jnaEhqAQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: j8CcDU8mOczwwXiIR7lhB8L5zqlhAAVPdU4QAZq76IlI+wGf+H419Zt7tYBc7fJ6THQ6Gj+leXuvNieD7gGgBA==
+edSignature: 3Fb8Dg1mIxcd7liwCPnoFcWCyFPzQs15CJSHRIVkKLNjvtxQFYfpEr8RWhzOmf2B831iefimkOpIRAr2pgWIDQ==
 length: 3233
 -->
