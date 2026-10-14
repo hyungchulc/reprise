@@ -42,6 +42,11 @@ struct MemoryExplorerView: View {
     }
 
     var body: some View {
+        // Split in two so each half type-checks quickly on every compiler.
+        overlayEvents(events(dialogs(layout)))
+    }
+
+    private var layout: some View {
         GeometryReader { geometry in
             ZStack {
                 Color.clear.contentShape(Rectangle())
@@ -85,6 +90,10 @@ struct MemoryExplorerView: View {
         .animation(searchAnimation, value: searchExpanded)
         .animation(searchAnimation, value: expandedResults)
         .animation(searchAnimation, value: min(resultHeight, 440))
+    }
+
+    private func dialogs(_ content: some View) -> some View {
+        content
         .sheet(isPresented: $model.showSettings) { SettingsView(model: model) }
         .sheet(isPresented: $model.showOnboarding) { OnboardingView(model: model) }
         .alert("Reprise", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
@@ -96,6 +105,11 @@ struct MemoryExplorerView: View {
         .confirmationDialog("Delete this recording, its transcript and its audio?", isPresented: $deleteRecordingConfirmation) {
             Button("Delete Recording", role: .destructive) { audio.unload(); Task { await model.deleteRecording() } }
         }
+    }
+
+    /// What the memory view does when the model, the overlay or playback changes.
+    private func events(_ content: some View) -> some View {
+        content
         .onChange(of: model.selection?.id) { _, _ in
             pan = .zero; showText = false
         }
@@ -116,6 +130,11 @@ struct MemoryExplorerView: View {
             await audio.load(moment: model.openRecording, root: model.root, cipher: model.cipher)
             if let offset = model.recordingOffset { audio.seek(to: offset); model.recordingOffset = nil }
         }
+    }
+
+    /// What the memory view does when the overlay opens or hides, and while memories play.
+    private func overlayEvents(_ content: some View) -> some View {
+        content
         .onDisappear { audio.unload() }
         .onReceive(NotificationCenter.default.publisher(for: .repriseFocusSearch)) { _ in
             searchExpanded = true

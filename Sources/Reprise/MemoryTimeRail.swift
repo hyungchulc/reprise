@@ -67,32 +67,7 @@ struct MemoryTimeRail: View {
                     model.moveTimeline(from: referenceDate, by: offset)
                 })
                 ForEach(segments.filter { $0.kind == "meeting" }) { segment in
-                    let axis = model.timelineAxis
-                    let x = geometry.size.width / 2 + (axis.position(of: segment.start) - axis.position(of: referenceDate)) / secondsPerPoint
-                    let end = geometry.size.width / 2 + (axis.position(of: segment.end) - axis.position(of: referenceDate)) / secondsPerPoint
-                    let left = max(0, x - 14)
-                    let right = min(geometry.size.width, max(x + 14, end))
-                    if right > left {
-                        // A recording spans its whole time; the point clicked is where playback starts.
-                        HStack(spacing: 4) {
-                            Image(systemName: "waveform").font(.system(size: 12, weight: .semibold))
-                            if right - left > 100 { Text(segment.appName).repriseFont(.caption).lineLimit(1) }
-                        }.frame(width: right - left, height: 22)
-                            .foregroundStyle(Color.accentColor)
-                            .background(Color.accentColor.opacity(model.openRecording?.id == segment.id ? 0.25 : 0.13), in: RoundedRectangle(cornerRadius: 5))
-                            .overlay { RoundedRectangle(cornerRadius: 5).stroke(Color.accentColor.opacity(0.7), lineWidth: 1) }
-                            .contentShape(Rectangle())
-                            .onTapGesture(coordinateSpace: .local) { location in
-                                let position = axis.position(of: referenceDate) + Double(left + location.x - geometry.size.width / 2) * secondsPerPoint
-                                onOpenRecording(segment.id)
-                                Task { await model.openRecording(id: segment.id, at: axis.date(at: position)) }
-                            }
-                            .position(x: (left + right) / 2, y: 53)
-                            .help("Recording: \(segment.start.formatted(date: .abbreviated, time: .shortened)) to \(segment.end.formatted(date: .omitted, time: .shortened))")
-                            .accessibilityElement(children: .ignore).accessibilityAddTraits(.isButton)
-                            .accessibilityLabel("Open timeline recording at \(segment.start.formatted(date: .abbreviated, time: .shortened))")
-                            .accessibilityAction { onOpenRecording(segment.id); Task { await model.openRecording(id: segment.id) } }
-                    }
+                    recordingLane(segment, width: geometry.size.width)
                 }
                 Rectangle().fill(Color.white.opacity(0.95)).frame(width: 2)
                     .shadow(color: .black.opacity(0.16), radius: 1)
@@ -102,6 +77,45 @@ struct MemoryTimeRail: View {
             .accessibilityValue("\(model.selection?.appName ?? "") \(referenceDate.formatted(date: .numeric, time: .standard))")
             .accessibilityAdjustableAction { direction in model.step(direction == .increment ? -1 : 1) }
             .task(id: model.timelineAxis.id) { await updateSegments() }
+    }
+
+    /// A recording's lane under the timeline. It spans the recording's whole time, and the point
+    /// clicked is where playback starts.
+    @ViewBuilder
+    private func recordingLane(_ segment: TimelineSegment, width: CGFloat) -> some View {
+        let start = laneX(segment.start, width: width)
+        let end = laneX(segment.end, width: width)
+        let left: CGFloat = max(0, start - 14)
+        let right: CGFloat = min(width, max(start + 14, end))
+        if right > left {
+            RecordingLaneLabel(name: segment.appName, width: right - left, open: model.openRecording?.id == segment.id)
+                .contentShape(Rectangle())
+                .onTapGesture(coordinateSpace: .local) { location in openRecording(segment, atX: left + location.x, width: width) }
+                .position(x: (left + right) / 2, y: 53)
+                .help(laneHelp(segment))
+                .accessibilityElement(children: .ignore)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel("Open timeline recording at \(segment.start.formatted(date: .abbreviated, time: .shortened))")
+                .accessibilityAction { openRecording(segment, atX: nil, width: width) }
+        }
+    }
+
+    private func laneX(_ date: Date, width: CGFloat) -> CGFloat {
+        let axis = model.timelineAxis
+        let seconds: Double = axis.position(of: date) - axis.position(of: referenceDate)
+        return width / 2 + CGFloat(seconds / secondsPerPoint)
+    }
+
+    private func openRecording(_ segment: TimelineSegment, atX x: CGFloat?, width: CGFloat) {
+        onOpenRecording(segment.id)
+        let axis = model.timelineAxis
+        let date: Date? = x.flatMap { x in axis.date(at: axis.position(of: referenceDate) + Double(x - width / 2) * secondsPerPoint) }
+        Task { await model.openRecording(id: segment.id, at: date) }
+    }
+
+    private func laneHelp(_ segment: TimelineSegment) -> String {
+        let start = segment.start.formatted(date: .abbreviated, time: .shortened)
+        return "Recording: \(start) to \(segment.end.formatted(date: .omitted, time: .shortened))"
     }
 
     private func updateSegments() async {
@@ -116,5 +130,23 @@ struct MemoryTimeRail: View {
         }
         guard !Task.isCancelled else { return }
         artwork = images
+    }
+}
+
+/// How a recording's lane looks: a waveform, and its app's name when there is room.
+private struct RecordingLaneLabel: View {
+    let name: String
+    let width: CGFloat
+    let open: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "waveform").font(.system(size: 12, weight: .semibold))
+            if width > 100 { Text(name).repriseFont(.caption).lineLimit(1) }
+        }
+        .frame(width: width, height: 22)
+        .foregroundStyle(Color.accentColor)
+        .background(Color.accentColor.opacity(open ? 0.25 : 0.13), in: RoundedRectangle(cornerRadius: 5))
+        .overlay { RoundedRectangle(cornerRadius: 5).stroke(Color.accentColor.opacity(0.7), lineWidth: 1) }
     }
 }

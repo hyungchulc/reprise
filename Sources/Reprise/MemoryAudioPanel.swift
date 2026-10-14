@@ -28,37 +28,42 @@ struct MemoryAudioPanel: View {
 
     var body: some View { content.modifier(GlassSurface()) }
 
+    /// The title row with the recording's actions.
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "waveform").foregroundStyle(Color.accentColor)
+            Text(moment.windowTitle.isEmpty ? "Meeting" : moment.windowTitle).repriseFont(.heading).lineLimit(1)
+            Spacer(minLength: 8)
+            if recorder.transcribingMomentID == moment.id {
+                ProgressView().controlSize(.small)
+                Text(recorder.status).repriseFont(.caption).foregroundStyle(.secondary).lineLimit(1)
+            } else {
+                Button(action: onTranscribe) { Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90") }
+                    .help(moment.text.isEmpty ? "Transcribe recording" : "Transcribe again")
+                    .accessibilityLabel(moment.text.isEmpty ? "Transcribe recording" : "Transcribe again")
+                    .disabled(recorder.isBusy || recorder.isRecording || !audio.canPlay)
+            }
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(moment.text, forType: .string)
+            } label: { Image(systemName: "doc.on.doc") }
+                .help("Copy transcript").accessibilityLabel("Copy transcript").disabled(moment.text.isEmpty)
+            Button { transcriptExpanded.toggle() } label: {
+                Image(systemName: transcriptExpanded ? "text.bubble.fill" : "text.bubble")
+            }.help(transcriptExpanded ? "Hide transcript" : "Show transcript").accessibilityLabel(transcriptExpanded ? "Hide transcript" : "Show transcript")
+            if let onDelete {
+                Button(action: onDelete) { Image(systemName: "trash") }.help("Delete recording").accessibilityLabel("Delete recording")
+                    .disabled(recorder.transcribingMomentID == moment.id)
+            }
+            if let onClose {
+                Button(action: onClose) { Image(systemName: "xmark") }.help("Close recording").accessibilityLabel("Close recording")
+            }
+        }
+    }
+
     private var content: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: "waveform").foregroundStyle(Color.accentColor)
-                Text(moment.windowTitle.isEmpty ? "Meeting" : moment.windowTitle).repriseFont(.heading).lineLimit(1)
-                Spacer(minLength: 8)
-                if recorder.transcribingMomentID == moment.id {
-                    ProgressView().controlSize(.small)
-                    Text(recorder.status).repriseFont(.caption).foregroundStyle(.secondary).lineLimit(1)
-                } else {
-                    Button(action: onTranscribe) { Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90") }
-                        .help(moment.text.isEmpty ? "Transcribe recording" : "Transcribe again")
-                        .accessibilityLabel(moment.text.isEmpty ? "Transcribe recording" : "Transcribe again")
-                        .disabled(recorder.isBusy || recorder.isRecording || !audio.canPlay)
-                }
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(moment.text, forType: .string)
-                } label: { Image(systemName: "doc.on.doc") }
-                    .help("Copy transcript").accessibilityLabel("Copy transcript").disabled(moment.text.isEmpty)
-                Button { transcriptExpanded.toggle() } label: {
-                    Image(systemName: transcriptExpanded ? "text.bubble.fill" : "text.bubble")
-                }.help(transcriptExpanded ? "Hide transcript" : "Show transcript").accessibilityLabel(transcriptExpanded ? "Hide transcript" : "Show transcript")
-                if let onDelete {
-                    Button(action: onDelete) { Image(systemName: "trash") }.help("Delete recording").accessibilityLabel("Delete recording")
-                        .disabled(recorder.transcribingMomentID == moment.id)
-                }
-                if let onClose {
-                    Button(action: onClose) { Image(systemName: "xmark") }.help("Close recording").accessibilityLabel("Close recording")
-                }
-            }.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
+            header.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
 
             if transcriptExpanded {
                 Picker("View", selection: $page) {
