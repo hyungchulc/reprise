@@ -2,6 +2,7 @@ import AVFoundation
 import RepriseCore
 import XCTest
 @testable import Reprise
+import RepriseMCPKit
 
 final class MeetingAssistantTests: XCTestCase {
     func testQuestionsAndPromptsAreRecognized() {
@@ -55,6 +56,7 @@ final class MeetingAssistantTests: XCTestCase {
         var preferences = AssistantPreferences()
         preferences.listening = .openAI
         preferences.answers = .openAI
+        preferences.webSearch = false
         let started = Date()
         assistant.start(preferences, meetingLanguages: [], access: .chatGPT, codexPath: nil, provider: { AIProviderConfiguration() }, languages: SpeechLanguages())
         defer { assistant.stop() }
@@ -63,7 +65,7 @@ final class MeetingAssistantTests: XCTestCase {
         while Date().timeIntervalSince(started) < 60 {
             if heardAt == nil, assistant.lastQuestion != nil { heardAt = Date().timeIntervalSince(started) }
             if let answer = assistant.answers.first {
-                if case .searching(let terms) = answer.state, searched.last != terms { searched.append(terms) }
+                if case .working(let terms) = answer.state, searched.last != terms { searched.append(terms) }
                 if firstText == nil, !answer.text.isEmpty { firstText = Date().timeIntervalSince(started) }
                 if answer.state == .done { break }
                 if case .failed(let message) = answer.state { XCTFail(message); break }
@@ -76,6 +78,111 @@ final class MeetingAssistantTests: XCTestCase {
         XCTAssertTrue(answer.automatic)
         XCTAssertTrue(answer.text.contains("12"), answer.text)
         XCTAssertEqual(answer.sources.first?.moment.appName, "Slack")
+    }
+}
+
+extension MeetingAssistantTests {
+    /// A typed question about the public world is answered from the web through a CLI signed in on this Mac.
+    @MainActor func testTypedQuestionIsAnsweredFromTheWebWhenRequested() async throws {
+        guard ProcessInfo.processInfo.environment["REPRISE_TEST_OPENAI"] == "1", let route = ProcessInfo.processInfo.environment["REPRISE_TEST_WEB"].flatMap(WebSearchRoute.init(rawValue:)) else {
+            throw XCTSkip("Set REPRISE_TEST_OPENAI=1 and REPRISE_TEST_WEB=codex or claude to answer from the web.")
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-assistant-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let assistant = MeetingAssistant(store: try MomentStore(root: root, keys: testKeys), ai: AIClient())
+        for side in [MeetingAssistant.Speaker.you, .them] {
+            assistant.setFeed(side) { _, rate, deliver, _ in SpokenFeed(samples: [], rate: rate, deliver: deliver) }
+        }
+        var preferences = AssistantPreferences()
+        preferences.listening = .openAI
+        preferences.answers = .openAI
+        preferences.webRoute = route
+        assistant.start(preferences, meetingLanguages: [], access: .chatGPT, codexPath: nil, provider: { AIProviderConfiguration() }, languages: SpeechLanguages())
+        defer { assistant.stop() }
+        assistant.draft = "What is the latest stable version of the Swift programming language?"
+        let started = Date()
+        assistant.askDraft()
+        var activity: [String] = []
+        while Date().timeIntervalSince(started) < 120 {
+            if let answer = assistant.answers.first {
+                if case .working(let what) = answer.state, activity.last != what { activity.append(what) }
+                if answer.state == .done { break }
+                if case .failed(let message) = answer.state { XCTFail(message); break }
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let answer = try XCTUnwrap(assistant.answers.first)
+        print("Web answer in \(String(format: "%.1f", Date().timeIntervalSince(started))) s after \(activity): \(answer.text) pages \(answer.pages.map { "\($0.label) \($0.page.url)" })")
+        XCTAssertTrue(activity.contains { $0.hasPrefix("Searching the web") }, "\(activity)")
+        XCTAssertFalse(answer.pages.isEmpty)
+    }
+}
+
+extension MeetingAssistantTests {
+    /// A one-tool MCP server in Python: initialize, list and call, over stdio.
+    static let codeServer = #"""
+    import json, sys
+    for line in sys.stdin:
+        message = json.loads(line)
+        method, ident = message.get("method"), message.get("id")
+        if ident is None:
+            continue
+        if method == "initialize":
+            result = {"protocolVersion": message["params"]["protocolVersion"], "capabilities": {"tools": {}}, "serverInfo": {"name": "codes", "version": "1"}}
+        elif method == "tools/list":
+            result = {"tools": [{"name": "project_code", "description": "Returns the code word of a project by name.",
+                                 "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]},
+                                 "annotations": {"readOnlyHint": True}}]}
+        elif method == "tools/call":
+            project = message["params"].get("arguments", {}).get("project", "")
+            result = {"content": [{"type": "text", "text": "The code word of %s is PINEAPPLE-42." % project}]}
+        else:
+            result = {}
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": ident, "result": result}) + "\n")
+        sys.stdout.flush()
+    """#
+
+    /// A typed question is answered with a tool from the person's own MCP server, through OpenAI.
+    @MainActor func testTypedQuestionUsesAnMCPToolWhenRequested() async throws {
+        guard ProcessInfo.processInfo.environment["REPRISE_TEST_OPENAI"] == "1" else { throw XCTSkip("Set REPRISE_TEST_OPENAI=1 to answer with OpenAI.") }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-assistant-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let script = root.appendingPathComponent("codes.py")
+        try Self.codeServer.write(to: script, atomically: true, encoding: .utf8)
+        let assistant = MeetingAssistant(store: try MomentStore(root: root, keys: testKeys), ai: AIClient())
+        for side in [MeetingAssistant.Speaker.you, .them] {
+            assistant.setFeed(side) { _, rate, deliver, _ in SpokenFeed(samples: [], rate: rate, deliver: deliver) }
+        }
+        var preferences = AssistantPreferences()
+        preferences.listening = .openAI
+        preferences.answers = .openAI
+        preferences.webSearch = false
+        preferences.servers = [MCPServerSetting(name: "Codes", command: "/usr/bin/python3 -u '\(script.path)'")]
+        assistant.start(preferences, meetingLanguages: [], access: .chatGPT, codexPath: nil, provider: { AIProviderConfiguration() }, languages: SpeechLanguages())
+        defer { assistant.stop() }
+        let started = Date()
+        while Date().timeIntervalSince(started) < 30, assistant.notice?.contains("MCP") != true {
+            if let problem = assistant.problem { XCTFail(problem); return }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertEqual(assistant.notice, "1 MCP tool ready")
+        assistant.draft = "What is the code word of project Orion?"
+        assistant.askDraft()
+        var activity: [String] = []
+        while Date().timeIntervalSince(started) < 90 {
+            if let answer = assistant.answers.first {
+                if case .working(let what) = answer.state, activity.last != what { activity.append(what) }
+                if answer.state == .done { break }
+                if case .failed(let message) = answer.state { XCTFail(message); break }
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let answer = try XCTUnwrap(assistant.answers.first)
+        print("MCP answer after \(activity): \(answer.text)")
+        XCTAssertTrue(activity.contains("Using project_code from Codes"), "\(activity)")
+        XCTAssertTrue(answer.text.contains("PINEAPPLE-42"), answer.text)
     }
 }
 

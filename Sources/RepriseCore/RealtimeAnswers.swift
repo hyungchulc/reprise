@@ -26,8 +26,8 @@ public actor RealtimeAnswers {
 
     private let credential: @Sendable () async throws -> OpenAICredential
     private let model: String
-    private let instructions: String
-    private let tools: [Tool]
+    private var instructions: String
+    private var tools: [Tool]
     /// Each answer starts with a tool call, so it rests on what the tools find rather than on guesses.
     private let toolFirst: Bool
     private var socket: RealtimeSocket?
@@ -51,7 +51,7 @@ public actor RealtimeAnswers {
     public init(model: String = RealtimeAnswers.defaultModel, instructions: String, tools: [Tool], toolFirst: Bool = false,
                 credential: @escaping @Sendable () async throws -> OpenAICredential) {
         self.model = model; self.instructions = instructions; self.tools = tools; self.credential = credential
-        self.toolFirst = toolFirst && !tools.isEmpty
+        self.toolFirst = toolFirst
     }
 
     /// Opens the session ahead of the first question, so it starts answering at once.
@@ -75,6 +75,17 @@ public actor RealtimeAnswers {
         let task = Task { await self.begin(prompt, continuation) }
         continuation.onTermination = { termination in if case .cancelled = termination { task.cancel() } }
         return stream
+    }
+
+    /// Changes the instructions and tools, for the open session too, such as when MCP servers connect.
+    public func update(instructions: String, tools: [Tool]) async {
+        self.instructions = instructions
+        self.tools = tools
+        guard ready, let socket else { return }
+        var session = Self.session(model: model, instructions: instructions, tools: tools)
+        session.removeValue(forKey: "model")
+        if tools.isEmpty { session["tools"] = [Any](); session["tool_choice"] = "none" }
+        try? await socket.send(["type": "session.update", "session": session])
     }
 
     public func close() {
@@ -104,7 +115,7 @@ public actor RealtimeAnswers {
             try await ensureConnected()
             try await socket?.send(["type": "conversation.item.create",
                                     "item": ["type": "message", "role": "user", "content": [["type": "input_text", "text": prompt]]]])
-            try await socket?.send(toolFirst ? ["type": "response.create", "response": ["tool_choice": "required"]] : ["type": "response.create"])
+            try await socket?.send(toolFirst && !tools.isEmpty ? ["type": "response.create", "response": ["tool_choice": "required"]] : ["type": "response.create"])
         } catch {
             finish(throwing: error)
         }
@@ -163,6 +174,7 @@ public actor RealtimeAnswers {
             return
         }
         guard !current.calls.isEmpty else { finish(); return }
+        // Tools that went away since the session began are answered as gone.
         let calls = current.calls
         current.calls = []
         pending = current

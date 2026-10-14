@@ -344,6 +344,27 @@ memory; nothing is stored.
   by the question's four longest words.
 - **Automatic** asks OpenAI first. When OpenAI cannot start, the provider answers, and
   OpenAI is tried again two minutes later.
+- **Web search** is a `search_web` function tool for OpenAI answers; a provider answer
+  searches the question when memory search finds nothing. Automatic takes the OpenAI API key
+  when OpenAI is billed by key, then Codex, then Claude Code, then the API key of the AI &
+  Models provider, then any saved key. Codex runs as for answers with `web_search="live"`, low
+  reasoning and the first listed model its catalog describes as fast (11.7 s for one lookup
+  here, against 27.6 s on the default model). Claude Code runs as for answers with
+  `--tools WebSearch --allowedTools WebSearch` and low effort (about 12 s). Both return the
+  answer and its pages through the same output schema, and any other tool fails the lookup.
+  The OpenAI API uses the Responses `web_search` tool and its `url_citation` annotations,
+  Anthropic the `web_search_20250305` tool (at most three searches) and its citations, and
+  Gemini `google_search` grounding chunks. Pages are labeled W1, W2 and on through the
+  meeting.
+- **MCP tools.** Reprise is an MCP client through swift-sdk 0.12.1. A command server starts
+  without a shell from the words of its command line, with the person's home, a PATH of the
+  usual Homebrew, npm, nvm, bun, deno, cargo and uv folders, and its environment variables;
+  stderr is drained and its last line explains a failure. An address must be https, or http
+  on this Mac, and uses streamable HTTP with an optional bearer token. Connecting and
+  listing tools time out after 30 seconds and a call after 60; a result keeps 8,000
+  characters. Each tool that is on becomes a function named after the server and the tool
+  (letters, digits and `_`, at most 64 characters), and `session.update` gives the open
+  answer session the new tools. Tools marked `readOnlyHint` start on; the rest start off.
 
 ## Semantic search
 

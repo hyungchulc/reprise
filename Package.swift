@@ -17,13 +17,13 @@ let package = Package(
     targets: [
         .target(name: "RepriseCore", dependencies: [.product(name: "SQLCipher", package: "swift-sqlcipher")]),
         .target(name: "RepriseMCPKit", dependencies: ["RepriseCore", .product(name: "MCP", package: "swift-sdk")]),
-        .executableTarget(name: "Reprise", dependencies: ["RepriseCore", .product(name: "Sparkle", package: "Sparkle"),
+        .executableTarget(name: "Reprise", dependencies: ["RepriseCore", "RepriseMCPKit", .product(name: "Sparkle", package: "Sparkle"),
                                                     .product(name: "WhisperKit", package: "argmax-oss-swift"),
                                                     .product(name: "SpeakerKit", package: "argmax-oss-swift")]),
         .executableTarget(name: "RepriseMCP", dependencies: ["RepriseMCPKit"]),
         .testTarget(name: "RepriseCoreTests", dependencies: ["RepriseCore", .product(name: "SQLCipher", package: "swift-sqlcipher")]),
         .testTarget(name: "RepriseMCPTests", dependencies: ["RepriseMCPKit"]),
-        .testTarget(name: "RepriseAppTests", dependencies: ["Reprise"])
+        .testTarget(name: "RepriseAppTests", dependencies: ["Reprise", "RepriseMCPKit"])
     ],
     swiftLanguageModes: [.v5]
 )

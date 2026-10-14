@@ -100,6 +100,8 @@ and deletion cannot remove copies held by backups or external services.
 | Meeting assistant listening by OpenAI, when chosen | The microphone and what the Mac plays, while the assistant is open, streamed to OpenAI's Realtime API with a short-lived session secret made the same way |
 | Meeting assistant answers by OpenAI, when chosen | Each question, the last four minutes of the assistant's transcript and the memory excerpts its searches return, to OpenAI's Realtime API |
 | Meeting assistant answers by a provider | Each question, the last four minutes of the transcript and up to six matching memories, to the provider chosen in AI & Models |
+| Meeting assistant web search, when on | The search query the answer model writes, or the question, to OpenAI through Codex, to Anthropic through Claude Code, or to the vendor of the chosen API key; the pages are fetched on the vendor's side |
+| MCP servers you add | The arguments the answer model writes for a tool that is on, to that server: a command server runs on this Mac as you, an address receives them over the network |
 | Search, summaries and assistant answers by API key, when chosen | The same data a CLI provider gets, sent with the key to api.openai.com, api.anthropic.com or generativelanguage.googleapis.com |
 | Apple Intelligence, Ollama | Nothing leaves the Mac; Ollama is reached only on 127.0.0.1 |
 | MCP text tools | Requested OCR/transcripts/metadata to the connected client, which may transmit them onward |
@@ -120,7 +122,9 @@ Key (OpenAI)”, “Reprise API Key (Anthropic)” or “Reprise API Key (Google
 only to its vendor, in a request header, never in an address. OpenAI requests ask OpenAI not to
 store the response for later retrieval. Google may use what is sent with a Gemini key on its
 free tier to improve its products. Audio leaves the Mac only with OpenAI transcription, OpenAI
-live captions and the meeting assistant listening with OpenAI.
+live captions and the meeting assistant listening with OpenAI. The environment variables and
+token of an MCP server stay in the login keychain as “Reprise MCP Server (name)” and go only to
+that server.
 
 In-app AI search does not send image/audio bytes. MCP does not return raw audio and
 does not invoke another model itself. Reprise does not implement its own analytics

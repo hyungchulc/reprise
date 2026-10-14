@@ -65,7 +65,7 @@ downloaded-installation test on every supported macOS version.
 | Search | Local keyword search that also matches Korean words with particles, AI query planning, source-linked answers, follow-up questions, saved conversations |
 | Meetings | Explicit microphone recording, optional system audio, post-recording transcription with Apple's models or Whisper on your Mac, or OpenAI's newest models with a ChatGPT plan or API key, on-device speaker labels you can rename, automatic summaries with decisions and action items, inline playback and timestamp seeking |
 | Live captions | Captions over every app and full-screen video for what the Mac plays or the microphone, translated as they are spoken, by OpenAI with a ChatGPT plan or API key or on this Mac with Apple's speech and translation models on macOS 26; text size, color, background, lines and position |
-| Meeting assistant | A floating window that hears you and the others, answers the others' questions within about a second from the conversation and your memories with source links, and takes typed questions; OpenAI's Realtime model with a ChatGPT plan or API key, or any AI & Models provider; listening on this Mac on macOS 26 |
+| Meeting assistant | A floating window that hears you and the others, answers the others' questions within about a second from the conversation and your memories with source links, and takes typed questions; searches the web through Codex, Claude Code or an API key, and calls tools from MCP servers you add; OpenAI's Realtime model with a ChatGPT plan or API key, or any AI & Models provider; listening on this Mac on macOS 26 |
 | AI providers | Claude, Codex, Gemini, Grok, Cursor and OpenCode (free models) through their CLIs; your own OpenAI, Anthropic or Gemini API key; Apple's on-device model and Ollama on your Mac; install and sign-in from Settings, model, thinking-level and Fast mode controls in search, a context window choice for Claude and Grok, and reported token and context use |
 | MCP | Opt-in read-only memory search for Claude Desktop, Claude Code, Codex, Cursor and compatible local clients |
 | Appearance | System/custom accent, system/manual light and dark modes, text size, transitions and optional edge glow |
@@ -205,6 +205,12 @@ fastest, with the ChatGPT plan of the Codex CLI or an OpenAI API key; without Op
 provider chosen in AI & Models answers, and Apple's on-device model or Ollama keep everything
 on this Mac. What the assistant hears is not saved; record the meeting to keep a transcript.
 Live captions and the assistant stop when the Mac sleeps.
+
+The assistant also searches the web when a question needs it, through Codex or Claude Code
+signed in on this Mac or an OpenAI, Gemini or Anthropic API key, and shows the pages it
+used. **Settings > Meeting Assistant > MCP Tools** adds your own MCP servers by command or
+address; tools that only read start on, tools that change things start off, and the
+assistant calls the tools that are on while OpenAI answers.
 
 ## Updates
 

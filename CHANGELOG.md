@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.0-alpha.5
+
+- **The meeting assistant searches the web.** When a question needs the public web, such
+  as news, prices, people or a version number, the assistant searches it and shows the
+  pages it used beside the memories; a page opens in the browser. It searches through
+  Codex or Claude Code signed in on this Mac, within the plan's limits, or with an
+  OpenAI, Gemini or Anthropic API key. When OpenAI answers, it decides when to search;
+  with another provider, the assistant searches when your memories have nothing. Settings
+  > Meeting Assistant > Web Search chooses the route.
+- **Plug in your own MCP servers.** Settings > Meeting Assistant > MCP Tools adds a server
+  by command, such as `npx -y …`, or by address, with environment variables or a token
+  kept in the login keychain. Check starts the server and lists its tools: tools that only
+  read start on, and tools that change things start off. While OpenAI answers, the
+  assistant calls the tools that are on by itself, and servers turned on mid-meeting join
+  without starting over.
+- Source buttons under an answer wrap onto more lines.
+
 ## 0.9.0-alpha.4
 
 - **Search, summaries and the meeting assistant with an API key.** AI & Models offers

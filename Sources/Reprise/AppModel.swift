@@ -5,6 +5,7 @@ import ImageIO
 import IOKit.ps
 import LocalAuthentication
 import RepriseCore
+import RepriseMCPKit
 import Speech
 import SwiftUI
 import UniformTypeIdentifiers
@@ -128,11 +129,12 @@ final class AppModel: ObservableObject {
             if captions.isRunning, preferences.captions.listening != oldValue.captions.listening || preferences.openAIAccess != oldValue.openAIAccess {
                 Task { await startCaptions() }
             }
-            // Answer settings apply to the next question; a different way of listening starts over.
+            // Answer settings apply to the next question, new tools at once; a different way of listening starts over.
             assistant.preferences = preferences.assistant
-            if assistant.isRunning, preferences.assistant.listeningKey != oldValue.assistant.listeningKey
-                || preferences.assistant.useMemories != oldValue.assistant.useMemories || preferences.openAIAccess != oldValue.openAIAccess {
+            if assistant.isRunning, preferences.assistant.listeningKey != oldValue.assistant.listeningKey || preferences.openAIAccess != oldValue.openAIAccess {
                 Task { await startAssistant() }
+            } else if preferences.assistant.toolsKey != oldValue.assistant.toolsKey {
+                assistant.refreshTools(preferences.assistant, web: webSearchTools())
             }
         }
     }
@@ -669,7 +671,17 @@ final class AppModel: ObservableObject {
         if !CGPreflightScreenCaptureAccess() { await permissions.request(.screenCapture) }
         let provider = { [weak self] in self?.provider ?? AIProviderConfiguration() }
         assistant.start(preferences.assistant, meetingLanguages: preferences.speechLocales, access: preferences.openAIAccess,
-                        codexPath: codexPath, provider: provider, languages: speechLanguages)
+                        codexPath: codexPath, provider: provider, languages: speechLanguages,
+                        web: webSearchTools(), secrets: { MCPServerKeychain.load($0) })
+    }
+
+    /// The CLIs and keys web search can use, as AI & Models has them set up.
+    func webSearchTools() -> WebSearch.Tools {
+        func configuration(_ kind: AIProviderKind) -> AIProviderConfiguration {
+            provider.provider == kind ? provider : providerConfigurations[kind.rawValue] ?? AIProviderConfiguration(provider: kind)
+        }
+        return WebSearch.Tools(codex: configuration(.codex), claude: configuration(.claude),
+                               openAIByKey: preferences.openAIAccess == .apiKey, provider: provider.provider)
     }
 
     /// Answers the last question the others asked, opening the assistant first when it is closed.

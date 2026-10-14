@@ -22,6 +22,14 @@ enum CodexAnswerCatalog {
     return slug
   }
 
+  /// The listed model the catalog calls fast, for quick lookups; nil when none says so.
+  static func fastModel(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String? {
+    models(home: home)?.filter { $0["visibility"] as? String == "list" }
+      .sorted { ($0["priority"] as? Int ?? Int.max) < ($1["priority"] as? Int ?? Int.max) }
+      .first { ($0["description"] as? String)?.lowercased().hasPrefix("fast") == true }
+      .flatMap { $0["slug"] as? String }.flatMap { AICommand.validModel($0) ? $0 : nil }
+  }
+
   /// The models Codex itself works from: the catalog file its config names in `model_catalog_json`,
   /// else the cache Codex downloads. Only that one path is read from the config. Models a proxy
   /// serves under a provider prefix, such as "cursor/...", are left out: Reprise runs Codex against

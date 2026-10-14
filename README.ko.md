@@ -62,7 +62,7 @@ DMG에는 앱과 Applications 바로가기가 있으며 별도 설치 프로그�
 | 타임라인 | 전체 화면 오버레이, 앱 아이콘과 아이콘 기반 색상, 캘린더, 기록 공백 압축, 30초 이동 |
 | 검색 | 조사가 붙은 한국어 단어도 찾는 로컬 키워드 검색, AI 검색 계획, 원본 연결 답변, 후속 질문, 대화 저장 |
 | 회의 | 직접 시작하는 마이크 녹음, 선택적 시스템 오디오, 종료 후 전사(Mac 안의 Apple 모델이나 Whisper, 또는 ChatGPT 요금제나 API 키로 쓰는 OpenAI 최신 모델), 이름을 바꿀 수 있는 온디바이스 화자 구분, 결정 사항과 할 일까지 정리하는 자동 요약, 인라인 재생과 시간 이동 |
-| 회의 어시스턴트 | 나와 상대의 말을 듣고, 상대가 질문하면 대화와 내 메모리를 근거로 1초 남짓 만에 출처 링크와 함께 답하며, 직접 입력한 질문에도 답하는 떠 있는 창(ChatGPT 요금제나 API 키로 쓰는 OpenAI Realtime 모델, 또는 AI & Models의 아무 제공자), macOS 26에서는 Mac 안에서 듣기 |
+| 회의 어시스턴트 | 나와 상대의 말을 듣고, 상대가 질문하면 대화와 내 메모리를 근거로 1초 남짓 만에 출처 링크와 함께 답하며, 직접 입력한 질문에도 답하는 떠 있는 창(ChatGPT 요금제나 API 키로 쓰는 OpenAI Realtime 모델, 또는 AI & Models의 아무 제공자), Codex·Claude Code·API 키로 웹 검색, 직접 추가한 MCP 서버의 도구 사용, macOS 26에서는 Mac 안에서 듣기 |
 | 실시간 자막 | Mac에서 재생되는 소리나 마이크를 듣고 모든 앱과 전체 화면 동영상 위에 말하는 대로 번역한 자막(ChatGPT 요금제나 API 키로 쓰는 OpenAI, 또는 macOS 26에서 Mac 안의 Apple 음성 인식과 번역), 글자 크기·색·배경·줄 수·위치 |
 | AI 제공자 | CLI를 통한 Claude·Codex·Gemini·Grok·Cursor·OpenCode(무료 모델), 내 OpenAI·Anthropic·Gemini API 키, Mac 안에서 도는 Apple 온디바이스 모델과 Ollama, 설정에서 설치와 로그인, 모델 선택, 보고된 토큰 사용량 |
 | MCP | Claude Desktop·Claude Code·Codex·Cursor 및 호환 로컬 클라이언트의 선택적 읽기 전용 기억 검색 |
@@ -177,6 +177,11 @@ OpenAI 실시간 번역은 말하는 언어를 스스로 알아듣고 57개 언�
 OpenAI Realtime 모델이 가장 빨리 답하고, OpenAI가 없으면 AI & Models에서 고른 제공자가 답하며, Apple 온디바이스
 모델이나 Ollama를 쓰면 모든 것이 이 Mac 안에 머뭅니다. 어시스턴트가 들은 내용은 저장하지 않으니, 전사가 필요하면
 회의를 녹음하세요. 실시간 자막과 어시스턴트는 Mac이 잠자기에 들어가면 멈춥니다.
+
+어시스턴트는 질문에 필요하면 이 Mac에서 로그인된 Codex나 Claude Code, 또는 OpenAI·Gemini·Anthropic API 키로
+웹을 검색하고, 참고한 페이지를 함께 보여 줍니다. **Settings > Meeting Assistant > MCP Tools**에서 내 MCP 서버를
+명령이나 주소로 추가할 수 있습니다. 읽기만 하는 도구는 켜진 채로, 무언가를 바꾸는 도구는 꺼진 채로 시작하며,
+OpenAI가 답할 때 어시스턴트가 켜진 도구를 직접 호출합니다.
 
 ## 업데이트
 

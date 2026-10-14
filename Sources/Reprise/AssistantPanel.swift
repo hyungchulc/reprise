@@ -165,8 +165,8 @@ private struct AssistantAnswerCard: View {
                 Text(answer.text).font(.body).textSelection(.enabled)
             }
             state
-            if !answer.sources.isEmpty {
-                HStack(spacing: 6) {
+            if !answer.sources.isEmpty || !answer.pages.isEmpty {
+                ChipFlow(spacing: 6) {
                     ForEach(answer.sources, id: \.label) { source in
                         Button { open(source.moment) } label: {
                             Text("\(source.label) · \(source.moment.appName) · \(source.moment.timestamp.formatted(.dateTime.month(.abbreviated).day()))")
@@ -175,6 +175,13 @@ private struct AssistantAnswerCard: View {
                         .buttonStyle(.bordered).controlSize(.small)
                         .help(source.moment.windowTitle)
                     }
+                    ForEach(answer.pages, id: \.label) { page in
+                        Button { if let url = URL(string: page.page.url) { NSWorkspace.shared.open(url) } } label: {
+                            Label("\(page.label) · \(Self.site(page.page.url))", systemImage: "globe").font(.caption).lineLimit(1)
+                        }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .help("\(page.page.title)\n\(page.page.url)")
+                    }
                 }
             }
         }
@@ -182,10 +189,18 @@ private struct AssistantAnswerCard: View {
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05)))
     }
 
+    /// The site a page is on, without "www.".
+    static func site(_ address: String) -> String {
+        guard let host = URL(string: address)?.host else { return address }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
     @ViewBuilder private var state: some View {
         switch answer.state {
         case .thinking: Label("Thinking...", systemImage: "ellipsis").font(.caption).foregroundStyle(.secondary)
-        case .searching(let terms): Label("Searching memories for \(terms)...", systemImage: "magnifyingglass").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        case .working(let activity):
+            Label(activity + "...", systemImage: activity.hasPrefix("Searching the web") ? "globe" : activity.hasPrefix("Searching memories") ? "magnifyingglass" : "wrench.and.screwdriver")
+                .font(.caption).foregroundStyle(.secondary).lineLimit(2)
         case .answering, .done: EmptyView()
         case .failed(let message): Label(message, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange).lineLimit(4)
         }
@@ -210,5 +225,41 @@ private struct AssistantAskBar: View {
                     .help("Answer the others' questions as they ask them")
             }.font(.caption)
         }
+    }
+}
+
+/// Lays chips out in rows, starting a new row when one is full.
+struct ChipFlow: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = rows(proposal.width ?? .infinity, subviews)
+        let width = rows.map { row in row.reduce(0) { $0 + $1.width } + spacing * CGFloat(max(0, row.count - 1)) }.max() ?? 0
+        let height = rows.map { $0.map(\.height).max() ?? 0 }.reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY, index = 0
+        for row in rows(bounds.width, subviews) {
+            var x = bounds.minX
+            for size in row {
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing; index += 1
+            }
+            y += (row.map(\.height).max() ?? 0) + spacing
+        }
+    }
+
+    private func rows(_ width: CGFloat, _ subviews: Subviews) -> [[CGSize]] {
+        var rows: [[CGSize]] = [[]], used: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            let size_ = CGSize(width: min(size.width, width), height: size.height)
+            if !rows[rows.count - 1].isEmpty && used + spacing + size_.width > width { rows.append([]); used = 0 }
+            used += (rows[rows.count - 1].isEmpty ? 0 : spacing) + size_.width
+            rows[rows.count - 1].append(size_)
+        }
+        return rows
     }
 }

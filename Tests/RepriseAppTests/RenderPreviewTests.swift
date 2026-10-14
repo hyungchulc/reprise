@@ -3,6 +3,7 @@ import SwiftUI
 import XCTest
 @testable import RepriseCore
 @testable import Reprise
+import RepriseMCPKit
 
 /// Renders new settings and panels to PNG files for a visual check, on request.
 final class RenderPreviewTests: XCTestCase {
@@ -69,10 +70,12 @@ final class RenderPreviewTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         _ = NSApplication.shared
         let model = try AppModel(root: root, keys: testKeys, models: root.appendingPathComponent("Models"))
+        model.preferences.assistant.servers = [MCPServerSetting(name: "Brave Search", command: "npx -y @brave/brave-search-mcp-server"),
+                                               MCPServerSetting(name: "Notes", url: "https://notes.example.com/mcp", enabled: false)]
         for (listening, answers) in [(CaptionEngine.automatic, AssistantAnswerEngine.automatic), (.onDevice, .provider)] {
             model.preferences.assistant.listening = listening
             model.preferences.assistant.answers = answers
-            let form = Form { AssistantSettings(model: model, assistant: model.assistant) }.formStyle(.grouped).frame(width: 592, height: 1250)
+            let form = Form { AssistantSettings(model: model, assistant: model.assistant) }.formStyle(.grouped).frame(width: 592, height: 1750)
             try render(form, to: URL(fileURLWithPath: folder).appendingPathComponent("assistant-\(listening.rawValue)-\(answers.rawValue).png"))
         }
         typealias Line = MeetingAssistant.Line
@@ -88,7 +91,8 @@ final class RenderPreviewTests: XCTestCase {
         let notes = Moment(id: "m2", appName: "Notes", windowTitle: "Orion security review", text: "", kind: "screen")
         answered.sources = [("M1", slack), ("M2", notes)]
         var searching = MeetingAssistant.Answer(question: "Who owns the security review?", automatic: false)
-        searching.state = .searching("security review, owner")
+        searching.state = .working("Searching the web for Orion security review owner")
+        answered.pages = [("W1", WebSearchResult.Source(title: "Orion launch moves to November", url: "https://www.example.com/orion"))]
         model.assistant.preview(lines: lines, answers: [answered, searching], heardBy: [.you: "OpenAI", .them: "OpenAI"])
         let panel = AssistantView(model: model, assistant: model.assistant).frame(width: 380, height: 560)
         try render(panel, to: URL(fileURLWithPath: folder).appendingPathComponent("assistant-panel.png"))
@@ -96,6 +100,8 @@ final class RenderPreviewTests: XCTestCase {
         try render(AssistantView(model: model, assistant: model.assistant).frame(width: 380, height: 560),
                    to: URL(fileURLWithPath: folder).appendingPathComponent("assistant-panel-empty.png"))
         model.assistant.stop()
+        let editor = MCPServerEditor(server: MCPServerSetting(name: "Brave Search", command: "npx -y @brave/brave-search-mcp-server"), isNew: true, save: { _ in }, remove: {})
+        try render(editor, to: URL(fileURLWithPath: folder).appendingPathComponent("assistant-mcp-editor.png"))
     }
 
     /// AI & Models with an API provider. The keychain is only asked whether keys exist, never read.
