@@ -473,10 +473,11 @@ final class AppModel: ObservableObject {
         if !CGPreflightScreenCaptureAccess() { await permissions.request(.screenCapture) }
         await capture.start(settings: settings)
         appliedCaptureSettings = settings
+        // The window stays open: capture skips screens while Reprise is visible and saves again
+        // once it closes. Closing it here felt like the app was shutting down.
         if capture.isRecording {
             UserDefaults.standard.set(true, forKey: Self.captureSessionKey)
             UserDefaults.standard.set(false, forKey: "recordingManuallyPaused")
-            NotificationCenter.default.post(name: .repriseCloseMemory, object: nil)
         }
         if let message = capture.lastError { error = message }
     }

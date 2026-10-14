@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.1-alpha.4
+
+- Starting screen recording from the memory window keeps the window open. Recording is
+  on at once, and screens are saved again when the window closes, as before.
+
 ## 0.8.1-alpha.3
 
 - **Recording no longer stops a minute after launch.** In 0.8.1-alpha.1 and alpha.2,
