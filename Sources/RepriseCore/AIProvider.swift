@@ -4,11 +4,21 @@ import Darwin
 
 public enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
     case claude, codex, gemini, grok, cursor, opencode, ollama, apple
+    /// Reached with the person's own API key instead of a CLI and subscription.
+    case openAIAPI = "openai-api", anthropicAPI = "anthropic-api", geminiAPI = "gemini-api"
     public var id: String { rawValue }
     public var displayName: String {
         switch self {
         case .claude: "Claude"; case .codex: "Codex"; case .gemini: "Gemini"; case .grok: "Grok"
         case .cursor: "Cursor"; case .opencode: "OpenCode"; case .ollama: "Ollama"; case .apple: "Apple Intelligence"
+        case .openAIAPI: "OpenAI API"; case .anthropicAPI: "Anthropic API"; case .geminiAPI: "Gemini API"
+        }
+    }
+    /// The key a provider reached by API uses; nil for CLIs and models on this Mac.
+    public var apiKeyProvider: APIKeyProvider? {
+        switch self {
+        case .openAIAPI: .openAI; case .anthropicAPI: .anthropic; case .geminiAPI: .gemini
+        default: nil
         }
     }
     /// Empty means the CLI's current automatic/default selection, not a pinned model generation.
@@ -17,7 +27,7 @@ public enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendabl
     /// Google's Antigravity CLI, which replaced Gemini CLI for personal accounts in June 2026.
     public var commandName: String? {
         switch self {
-        case .gemini: "agy"; case .cursor: "cursor-agent"; case .apple: nil
+        case .gemini: "agy"; case .cursor: "cursor-agent"; case .apple, .openAIAPI, .anthropicAPI, .geminiAPI: nil
         default: rawValue
         }
     }
@@ -171,6 +181,9 @@ public enum AIProviderError: Error, LocalizedError, Equatable {
     case timedOut, outputLimit, cancelled, processFailed(Int32), invalidResponse
     case toolAttempt, invalidCitation, providerFailed, authenticationRequired
     case contextTooLarge, refused, modelMissing
+    case apiKeyMissing
+    /// An API's own failure, in words safe to show.
+    case apiFailed(String)
     public var errorDescription: String? {
         switch self {
         case .unavailable: return "The provider CLI is not installed at the configured path."
@@ -187,8 +200,10 @@ public enum AIProviderError: Error, LocalizedError, Equatable {
         case .providerFailed: return "The provider reported an error. Check its sign-in or subscription separately."
         case .authenticationRequired: return "Subscription sign-in is required. Open AI & Models and choose Sign In."
         case .contextTooLarge: return "This needs more text than the model can read at once. Ask about a shorter period or choose another provider."
-        case .refused: return "The on-device model declined to answer this. Try rephrasing or choose another provider."
+        case .refused: return "The model declined to answer this. Try rephrasing or choose another provider."
         case .modelMissing: return "The selected model is not downloaded. Download it in AI & Models or choose another."
+        case .apiKeyMissing: return "Add an API key for this provider in AI & Models."
+        case .apiFailed(let message): return message
         }
     }
 }
@@ -223,6 +238,11 @@ public actor AIClient {
             if models.isEmpty { return status(true, false, "Download a model to use Ollama") }
             if !configuration.model.isEmpty && !models.contains(configuration.model) { return status(true, false, "The selected model is not downloaded") }
             return status(true, true, "Runs on this Mac")
+        case .openAIAPI, .anthropicAPI, .geminiAPI:
+            // A saved key is enough to try; the account check below asks the vendor.
+            let saved = configuration.provider.apiKeyProvider.map(APIKeys.has) ?? false
+            return AIProviderStatus(provider: configuration.provider, isInstalled: saved, canAnswer: saved,
+                                    message: saved ? "Billed to your API account" : "Add an API key", quotaRemaining: nil, authenticationVerified: false)
         default: break
         }
         guard let executable = AICommand.executable(configuration) else {
@@ -265,6 +285,8 @@ public actor AIClient {
         case .ollama:
             return try await Ollama.generate(input: input, schema: schema, systemPrompt: systemPrompt,
                                              model: configuration.model, timeout: configuration.timeoutSeconds)
+        case .openAIAPI, .anthropicAPI, .geminiAPI:
+            return try await ProviderAPI.generate(input: input, schema: schema, systemPrompt: systemPrompt, configuration: configuration)
         default: break
         }
         var configuration = configuration
@@ -351,7 +373,7 @@ enum AICommand {
         case .gemini: required = ["--print", "--output-format", "--input-format", "--json-schema", "--disable-slash-commands"]
         case .cursor: required = ["--print", "--output-format", "--mode", "--workspace", "--trust", "--model"]
         case .opencode: required = ["--format", "--model", "--pure"]
-        case .ollama, .apple: return false
+        case .ollama, .apple, .openAIAPI, .anthropicAPI, .geminiAPI: return false
         }
         return required.allSatisfy(help.contains) && (provider != .codex || CodexAnswerCatalog.isAvailable) &&
             (![.grok, .gemini, .cursor, .opencode].contains(provider) || AIProcessSandbox.isAvailable)
@@ -398,7 +420,7 @@ enum AICommand {
             args = ["--print", "--output-format", "stream-json", "--mode", "ask", "--trust"]
         case .opencode:
             return ["run", "--pure", "--format", "json", "--model", configuration.model.isEmpty ? openCodeDefaultModel : configuration.model]
-        case .ollama, .apple:
+        case .ollama, .apple, .openAIAPI, .anthropicAPI, .geminiAPI:
             return []
         }
         if !configuration.model.isEmpty { args += ["--model", configuration.model] }

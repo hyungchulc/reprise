@@ -150,6 +150,8 @@ public extension AIClient {
             return await Ollama.models().map { AIModelOption(id: $0, name: $0) }
         case .apple:
             return []
+        case .openAIAPI, .anthropicAPI, .geminiAPI:
+            return await ProviderAPI.models(configuration.provider)
         }
     }
 

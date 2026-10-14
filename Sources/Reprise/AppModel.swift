@@ -794,10 +794,11 @@ final class AppModel: ObservableObject {
     var modelChoiceUnlisted: Bool { !modelChoice.isEmpty && !modelChoices.contains { $0.id == modelChoice } }
     var defaultModelLabel: String {
         switch provider.provider {
-        case .opencode: "Space Bunny (free, not kept)"
-        case .ollama: "First downloaded model"
-        case .gemini: "Gemini Flash, light thinking (fast)"
-        default: "Current provider default"
+        case .opencode: return "Space Bunny (free, not kept)"
+        case .ollama: return "First downloaded model"
+        case .gemini: return "Gemini Flash, light thinking (fast)"
+        case .openAIAPI, .anthropicAPI, .geminiAPI: return automaticAPIModel.map { "Automatic: \($0)" } ?? "Automatic, fast and low-cost"
+        default: return "Current provider default"
         }
     }
     var modelLabel: String {
@@ -806,7 +807,14 @@ final class AppModel: ObservableObject {
         case .gemini: return effectiveFamily?.name ?? "Gemini Flash"
         case .opencode: return "Space Bunny"
         case .ollama: return availableModels.first?.name ?? "No model"
+        case .openAIAPI, .anthropicAPI, .geminiAPI: return automaticAPIModel ?? "Automatic"
         default: return "Default model"
+        }
+    }
+    /// The fast, low-cost model an API provider uses when none is chosen, once its list has loaded.
+    private var automaticAPIModel: String? {
+        ProviderAPI.automaticModel(provider.provider, from: availableModels.map(\.id)).map { id in
+            availableModels.first { $0.id == id }?.name ?? id
         }
     }
 

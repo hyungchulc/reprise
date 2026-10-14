@@ -197,6 +197,35 @@ a reply with tool calls is rejected. Search sends at most 16 memories and 14 KiB
 Settings downloads a suggested model (EXAONE 3.5 2.4B for Korean, Qwen 3.5 4B, Gemma 3
 4B) or any named model through `/api/pull`.
 
+## API keys: OpenAI, Anthropic and Gemini
+
+These providers need no CLI. Each request reads the key from the login keychain and sends the
+same contract the CLIs get, the instructions and the evidence as one message, asking for JSON
+in the shape of the schema. No tool runs, and a reply that calls one is rejected.
+
+- **OpenAI API.** `POST https://api.openai.com/v1/responses` with `instructions`, `input`,
+  `store: false` and `text.format` set to the schema (`json_schema`, not strict, because
+  strict mode rejects some keywords the schemas use). The answer is the `output_text` of the
+  `message` items; a `refusal` part or an incomplete status fails the request.
+- **Anthropic API.** `POST https://api.anthropic.com/v1/messages` (`anthropic-version:
+  2023-06-01`, `max_tokens` 8,192) with one `answer` tool whose `input_schema` is the schema
+  and `tool_choice` naming it, so the answer arrives as the tool's input; the tool only
+  carries the structure.
+- **Gemini API.** `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
+  with the key in `x-goog-api-key`, `responseMimeType: application/json` and the schema as
+  `responseJsonSchema`, cleaned the same way as for Antigravity. A model that rejects the
+  schema is asked again without it. Thought parts are left out of the answer.
+
+Model menus list what the key can use (`/v1/models`, Anthropic's `/v1/models`, Gemini's
+`models` with `generateContent`), without dated snapshots and models for audio, images or
+embeddings. Automatic is the vendor's fast, low-cost model from that list: the newest
+`gpt-N-mini`, the newest Claude Haiku, and the highest-version Gemini Flash that is not Lite,
+stable before preview. Listing models also checks the key in Settings. A rejected key (401,
+or Gemini's invalid-key error) is reported without quoting the vendor's message, which echoes
+part of the key; a context error retries search with less evidence; other errors show the
+vendor's own message. Token use comes from each reply, and the context window from the model
+list where the vendor gives it (Anthropic, Gemini).
+
 ## Transcription engines
 
 Meetings are transcribed after recording, with the engine chosen in Audio settings. Every

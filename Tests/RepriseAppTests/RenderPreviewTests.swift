@@ -98,6 +98,19 @@ final class RenderPreviewTests: XCTestCase {
         model.assistant.stop()
     }
 
+    /// AI & Models with an API provider. The keychain is only asked whether keys exist, never read.
+    @MainActor func testRenderAPIProviderSettingsWhenRequested() async throws {
+        guard let folder = ProcessInfo.processInfo.environment["REPRISE_RENDER"] else { throw XCTSkip("Set REPRISE_RENDER to a folder to render previews.") }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-render-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = NSApplication.shared
+        let model = try AppModel(root: root, keys: testKeys, models: root.appendingPathComponent("Models"))
+        model.provider = AIProviderConfiguration(provider: .anthropicAPI)
+        let form = Form { AISettings(model: model) }.formStyle(.grouped).frame(width: 592, height: 1000)
+        try render(form, to: URL(fileURLWithPath: folder).appendingPathComponent("ai-anthropic-api.png"))
+    }
+
     /// The floating caption panel: shown while captions run, click-through, draggable only while moving.
     @MainActor func testCaptionPanelFollowsCaptionsWhenRequested() async throws {
         guard let folder = ProcessInfo.processInfo.environment["REPRISE_RENDER"] else { throw XCTSkip("Set REPRISE_RENDER to a folder to render previews.") }

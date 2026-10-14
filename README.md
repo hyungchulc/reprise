@@ -66,7 +66,7 @@ downloaded-installation test on every supported macOS version.
 | Meetings | Explicit microphone recording, optional system audio, post-recording transcription with Apple's models or Whisper on your Mac, or OpenAI's newest models with a ChatGPT plan or API key, on-device speaker labels you can rename, automatic summaries with decisions and action items, inline playback and timestamp seeking |
 | Live captions | Captions over every app and full-screen video for what the Mac plays or the microphone, translated as they are spoken, by OpenAI with a ChatGPT plan or API key or on this Mac with Apple's speech and translation models on macOS 26; text size, color, background, lines and position |
 | Meeting assistant | A floating window that hears you and the others, answers the others' questions within about a second from the conversation and your memories with source links, and takes typed questions; OpenAI's Realtime model with a ChatGPT plan or API key, or any AI & Models provider; listening on this Mac on macOS 26 |
-| AI providers | Claude, Codex, Gemini, Grok, Cursor and OpenCode (free models) through their CLIs; Apple's on-device model and Ollama on your Mac; install and sign-in from Settings, model, thinking-level and Fast mode controls in search, a context window choice for Claude and Grok, and reported token and context use |
+| AI providers | Claude, Codex, Gemini, Grok, Cursor and OpenCode (free models) through their CLIs; your own OpenAI, Anthropic or Gemini API key; Apple's on-device model and Ollama on your Mac; install and sign-in from Settings, model, thinking-level and Fast mode controls in search, a context window choice for Claude and Grok, and reported token and context use |
 | MCP | Opt-in read-only memory search for Claude Desktop, Claude Code, Codex, Cursor and compatible local clients |
 | Appearance | System/custom accent, system/manual light and dark modes, text size, transitions and optional edge glow |
 | Controls | Editable global shortcuts for the memory overlay, search alone, live captions, meeting recording, the meeting assistant and answering the last question, Dock/menu bar placement, launch options, pause reminders, exclusions and retention |
@@ -103,10 +103,12 @@ keys; authentication, availability and limits remain provider-controlled.
 | OpenCode | The OpenCode CLI only. Free models, no account. Zero-retention models are listed first; others may use prompts to improve their models |
 | Apple Intelligence | macOS 26 with Apple Intelligence on. Runs on this Mac; nothing leaves it |
 | Ollama | The Ollama app and a downloaded model. **Download** in Settings fetches a suggested or named model |
+| OpenAI API, Anthropic API, Gemini API | An API key from the vendor's console, pasted in Settings. No CLI; billed by the token to the key's account |
 
 Google has suspended accounts that used Gemini sign-ins through third-party tools.
 Reprise runs Google's own CLI in its documented mode and never reads the sign-in, but
-the risk is Google's call; choose Gemini only if you accept it.
+the risk is Google's call; choose Gemini only if you accept it. A Gemini API key does not
+carry this risk.
 
 Search plans keywords over the local full-text index, then supplies bounded OCR and
 transcript evidence to the chosen provider. The language model never reads the whole
@@ -121,8 +123,10 @@ Provider subprocesses use explicit tool restrictions, isolated temporary setting
 timeouts and bounded output. Unsupported CLI contracts fail closed. These controls
 reduce agent side effects; they are not a guarantee that a third-party executable
 is trustworthy. Remaining subscription quota is shown as unknown when unavailable. Private Cloud
-Compute is not available to third-party apps. An OpenAI API key can be used for
-transcription, live captions and the meeting assistant; search and summaries do not take API keys yet. See [provider contracts](docs/PROVIDERS.md).
+Compute is not available to third-party apps. Without a subscription, choose
+OpenAI API, Anthropic API or Gemini API and paste a key: search, summaries and the meeting
+assistant then run on that API account, billed by the token, and an OpenAI key also serves
+transcription, live captions and the assistant's listening. See [provider contracts](docs/PROVIDERS.md).
 
 ## MCP Connections
 

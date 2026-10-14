@@ -220,7 +220,7 @@ struct SettingsView: View {
             LabeledContent("Subscription remaining", value: "Unavailable in Reprise")
             ForEach(model.usages.prefix(12)) { entry in
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack { Text(entry.provider.capitalized).fontWeight(.medium); Spacer(); Text(entry.timestamp, format: .dateTime.month(.abbreviated).day().hour().minute()) }
+                    HStack { Text(AIProviderKind(rawValue: entry.provider)?.displayName ?? entry.provider.capitalized).fontWeight(.medium); Spacer(); Text(entry.timestamp, format: .dateTime.month(.abbreviated).day().hour().minute()) }
                     HStack { Text(entry.model.isEmpty ? "Provider default" : entry.model).lineLimit(1); Spacer(); Text("\(entry.inputTokens.map(String.init) ?? "?") in / \(entry.outputTokens.map(String.init) ?? "?") out").monospacedDigit() }.repriseFont(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -291,6 +291,9 @@ struct AISettings: View {
                 ForEach(AIProviderKind.allCases) { Text($0.displayName).tag($0) }
             }
             Text(Self.about(kind)).repriseFont(.caption).foregroundStyle(.secondary)
+            if let vendor = kind.apiKeyProvider {
+                APIKeyField(provider: vendor) { Task { await model.refreshStatus() } }
+            }
             if kind != .apple {
                 Picker("Model", selection: selection) {
                     Text(model.defaultModelLabel).tag("")
@@ -321,7 +324,9 @@ struct AISettings: View {
             LabeledContent("Account", value: model.accountStatus?.message ?? "Checking...")
             LabeledContent("Search", value: model.providerStatus?.canAnswer == true ? "Available" : (model.providerStatus?.message ?? "Checking..."))
             HStack {
-                if model.providerStatus != nil && !installed {
+                if kind.apiKeyProvider != nil {
+                    EmptyView()
+                } else if model.providerStatus != nil && !installed {
                     Button(kind == .apple ? "Open Apple Intelligence Settings" : "Install \(kind.displayName)", systemImage: kind == .apple ? "gearshape" : "arrow.down.circle") { model.installProvider() }
                 } else if kind.hasSignIn {
                     Button("Sign In", systemImage: "person.crop.circle") { model.signIn() }.disabled(!installed)
@@ -332,7 +337,7 @@ struct AISettings: View {
                 if model.checkingProvider { ProgressView().controlSize(.small) }
                 Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refreshStatus() } }.disabled(model.checkingProvider)
             }
-            if model.providerStatus != nil && !installed, kind != .apple {
+            if model.providerStatus != nil && !installed, kind != .apple, kind.apiKeyProvider == nil {
                 Text("Install opens Terminal and runs \(kind.displayName)'s own installer, so you can see each step. Choose Refresh when it finishes.")
                     .repriseFont(.caption).foregroundStyle(.secondary)
             }
@@ -355,7 +360,7 @@ struct AISettings: View {
                     .repriseFont(.caption).foregroundStyle(.secondary)
             }
         }
-        Section("CLI Connection") {
+        Section(kind.commandName != nil && kind != .ollama ? "CLI Connection" : "Connection") {
             if kind.commandName != nil && kind != .ollama {
                 TextField("Executable path", text: Binding(get: { model.provider.executablePath ?? "" }, set: { model.provider.executablePath = $0.isEmpty ? nil : $0 }))
             }
@@ -372,6 +377,9 @@ struct AISettings: View {
         case .opencode: "Free OpenCode Zen models with no sign-in. Searched text goes to the model's provider; models marked \"not kept\" keep nothing, others may use it for training."
         case .gemini: "Uses your Google account through Antigravity CLI, which replaced Gemini CLI. Searched screen text and transcripts are sent to Google. Google has suspended accounts that used their sign-in in third-party tools; Reprise runs Google's own CLI and never reads the sign-in, but the risk is not zero."
         case .cursor: "Uses your Cursor subscription. Searched screen text and transcripts are sent to Cursor and the model you choose."
+        case .openAIAPI: "Uses your OpenAI API key instead of a subscription, billed by the token to that API account. No CLI is needed. Searched screen text and transcripts are sent to OpenAI."
+        case .anthropicAPI: "Uses your Anthropic API key instead of a subscription, billed by the token to that API account. No CLI is needed. Searched screen text and transcripts are sent to Anthropic."
+        case .geminiAPI: "Uses a Gemini API key from Google AI Studio, billed by the token or within its free tier. No CLI is needed. Searched screen text and transcripts are sent to Google, which may use them to improve its products while the key is on the free tier."
         default: "Uses your \(kind.displayName) subscription through its CLI. Searched screen text and transcripts are sent to the provider; images and audio stay on this Mac."
         }
     }

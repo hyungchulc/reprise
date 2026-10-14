@@ -181,17 +181,18 @@ struct SpeakerLabelSettings: View {
 struct APIKeySettings: View {
     var body: some View {
         ForEach(APIKeySettings.offered) { APIKeyField(provider: $0) }
-        Text("For a pay-per-use API account instead of a subscription. An OpenAI key works for transcription when OpenAI is chosen in Audio settings. Use is billed by the provider to the key's account.")
+        Text("For a pay-per-use API account instead of a subscription. Each key answers searches, summaries and the meeting assistant when its API is the provider above. An OpenAI key also serves transcription, live captions and the meeting assistant when their OpenAI account is set to the API key. Use is billed by the provider to the key's account.")
             .repriseFont(.caption).foregroundStyle(.secondary)
     }
     /// Providers whose keys some feature uses.
-    static let offered: [APIKeyProvider] = [.openAI]
+    static let offered: [APIKeyProvider] = APIKeyProvider.allCases
 }
 
 /// One provider's key: saved, or a field to paste it into.
 struct APIKeyField: View {
     let provider: APIKeyProvider
-    var saved: () -> Void = {}
+    /// Runs after the key is saved or removed.
+    var changed: () -> Void = {}
     @State private var draft = ""
     @State private var stored = false
     @State private var error: String?
@@ -201,22 +202,34 @@ struct APIKeyField: View {
                 if stored {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                     Text("Saved in Keychain").foregroundStyle(.secondary)
-                    Button("Remove", role: .destructive) { APIKeys.remove(provider); stored = false }
+                    Button("Remove", role: .destructive) { APIKeys.remove(provider); announce() }
                 } else {
-                    SecureField("Paste key", text: $draft).textFieldStyle(.roundedBorder).frame(width: 200).onSubmit(save)
+                    SecureField("API key", text: $draft, prompt: Text("Paste key")).labelsHidden()
+                        .textFieldStyle(.roundedBorder).frame(width: 200).onSubmit(save)
                     Button("Save", action: save).disabled(draft.isEmpty)
                     Link(destination: provider.consoleURL) { Image(systemName: "arrow.up.right.square") }.help("Get a \(provider.displayName) API key")
                 }
             }
-        }.onAppear { stored = APIKeys.has(provider) }
+        }
+        .onAppear { stored = APIKeys.has(provider) }
+        // The same key can show in more than one place on a page.
+        .onReceive(NotificationCenter.default.publisher(for: Self.keysChanged)) { _ in stored = APIKeys.has(provider) }
         if let error { Text(error).repriseFont(.caption).foregroundStyle(.red) }
     }
+
+    static let keysChanged = Notification.Name("RepriseAPIKeysChanged")
 
     private func save() {
         do {
             try APIKeys.save(draft, for: provider)
-            draft = ""; error = nil; stored = true
-            saved()
+            draft = ""; error = nil
+            announce()
         } catch let failure { error = failure.localizedDescription }
+    }
+
+    private func announce() {
+        stored = APIKeys.has(provider)
+        NotificationCenter.default.post(name: Self.keysChanged, object: nil)
+        changed()
     }
 }

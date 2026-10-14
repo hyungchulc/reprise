@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0-alpha.4
+
+- **Search, summaries and the meeting assistant with an API key.** AI & Models offers
+  OpenAI API, Anthropic API and Gemini API beside the subscriptions. Paste a key and
+  Reprise answers searches, writes meeting summaries and answers in the meeting assistant
+  with it, billed by the token to that API account, with no CLI or subscription. The
+  model list comes from the key's account; Automatic uses each vendor's fast, low-cost
+  model, such as the newest GPT mini, Claude Haiku or Gemini Flash. Keys stay in the
+  login keychain and go only to their vendor, and an error says whether the key, the
+  model or the account's limit was the problem.
+- AI & Models > API Keys holds all three keys, and the usage list names each provider.
+
 ## 0.9.0-alpha.3
 
 - **Meeting assistant.** A small window beside the meeting hears you through the

@@ -64,7 +64,7 @@ DMG에는 앱과 Applications 바로가기가 있으며 별도 설치 프로그�
 | 회의 | 직접 시작하는 마이크 녹음, 선택적 시스템 오디오, 종료 후 전사(Mac 안의 Apple 모델이나 Whisper, 또는 ChatGPT 요금제나 API 키로 쓰는 OpenAI 최신 모델), 이름을 바꿀 수 있는 온디바이스 화자 구분, 결정 사항과 할 일까지 정리하는 자동 요약, 인라인 재생과 시간 이동 |
 | 회의 어시스턴트 | 나와 상대의 말을 듣고, 상대가 질문하면 대화와 내 메모리를 근거로 1초 남짓 만에 출처 링크와 함께 답하며, 직접 입력한 질문에도 답하는 떠 있는 창(ChatGPT 요금제나 API 키로 쓰는 OpenAI Realtime 모델, 또는 AI & Models의 아무 제공자), macOS 26에서는 Mac 안에서 듣기 |
 | 실시간 자막 | Mac에서 재생되는 소리나 마이크를 듣고 모든 앱과 전체 화면 동영상 위에 말하는 대로 번역한 자막(ChatGPT 요금제나 API 키로 쓰는 OpenAI, 또는 macOS 26에서 Mac 안의 Apple 음성 인식과 번역), 글자 크기·색·배경·줄 수·위치 |
-| AI 제공자 | CLI를 통한 Claude·Codex·Gemini·Grok·Cursor·OpenCode(무료 모델), Mac 안에서 도는 Apple 온디바이스 모델과 Ollama, 설정에서 설치와 로그인, 모델 선택, 보고된 토큰 사용량 |
+| AI 제공자 | CLI를 통한 Claude·Codex·Gemini·Grok·Cursor·OpenCode(무료 모델), 내 OpenAI·Anthropic·Gemini API 키, Mac 안에서 도는 Apple 온디바이스 모델과 Ollama, 설정에서 설치와 로그인, 모델 선택, 보고된 토큰 사용량 |
 | MCP | Claude Desktop·Claude Code·Codex·Cursor 및 호환 로컬 클라이언트의 선택적 읽기 전용 기억 검색 |
 | 모양 | 시스템/사용자 지정 강조색, 시스템/수동 밝은·어두운 모드, 글자 크기, 전환 효과와 선택적 테두리 효과 |
 | 제어 | 메모리 오버레이·검색만·실시간 자막·회의 녹음·회의 어시스턴트·마지막 질문 답하기의 변경 가능한 전역 단축키, Dock/메뉴 막대 표시, 실행 옵션, 일시 정지 알림, 제외 목록과 보관 기간 |
@@ -93,10 +93,11 @@ DMG에는 앱과 Applications 바로가기가 있으며 별도 설치 프로그�
 | OpenCode | OpenCode CLI만 있으면 됨. 무료 모델, 계정 불필요. 데이터를 보관하지 않는 모델이 먼저 나오며, 나머지는 입력을 모델 개선에 쓸 수 있음 |
 | Apple Intelligence | Apple Intelligence가 켜진 macOS 26. 이 Mac 안에서만 실행 |
 | Ollama | Ollama 앱과 내려받은 모델. 설정의 **Download**로 추천 모델이나 원하는 모델을 받음 |
+| OpenAI API, Anthropic API, Gemini API | 각 회사 콘솔에서 만든 API 키를 설정에 붙여 넣기. CLI 불필요, 키의 계정에 토큰 단위로 과금 |
 
 Google은 타사 도구로 Gemini 로그인을 사용한 계정을 정지한 적이 있습니다. Reprise는 Google의
 CLI를 문서화된 방식으로 실행하고 로그인 정보를 읽지 않지만, 판단은 Google이 합니다.
-이 위험을 받아들일 때만 Gemini를 고르세요.
+이 위험을 받아들일 때만 Gemini를 고르세요. Gemini API 키를 쓰면 이 위험이 없습니다.
 
 검색은 로컬 전문 검색 인덱스에 대한 키워드를 계획한 후, 크기가 제한된 OCR·전사 근거를
 선택한 제공자에게 보냅니다. 언어 모델이 라이브러리 전체를 읽지는 않습니다. 검색어와
@@ -110,7 +111,7 @@ CLI를 문서화된 방식으로 실행하고 로그인 정보를 읽지 않지�
 지원되는 CLI 제약을 확인할 수 없으면 답변 실행을 차단합니다. 이런 조치는 에이전트의
 부작용을 줄이지만, 타사 실행 파일 자체의 신뢰성을 보장하지는 않습니다.
 남은 구독 한도를 확인할 수 없으면 알 수 없음으로 표시합니다. Private Cloud Compute는
-타사 앱이 쓸 수 없습니다. OpenAI API 키는 전사, 실시간 자막, 회의 어시스턴트에 쓸 수 있고, 검색과 요약은 아직 API 키를 받지 않습니다.
+타사 앱이 쓸 수 없습니다. 구독이 없으면 OpenAI API, Anthropic API, Gemini API 중 하나를 고르고 키를 붙여 넣으세요. 검색, 요약, 회의 어시스턴트가 그 API 계정에서 토큰 단위로 과금되어 돌아가고, OpenAI 키는 전사, 실시간 자막, 어시스턴트의 듣기에도 쓰입니다.
 [제공자별 동작 계약](docs/PROVIDERS.md)을 참고하세요.
 
 ## MCP 연결

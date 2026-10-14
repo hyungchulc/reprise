@@ -17,6 +17,17 @@ public extension AIClient {
         case .opencode:
             let installed = AICommand.executable(configuration) != nil
             return AIAccountStatus(signedIn: installed ? true : false, message: installed ? "Free models, no sign-in needed" : "CLI not installed")
+        case .openAIAPI, .anthropicAPI, .geminiAPI:
+            guard let vendor = configuration.provider.apiKeyProvider, let key = APIKeys.load(vendor) else {
+                return AIAccountStatus(signedIn: false, message: "No API key saved")
+            }
+            do {
+                // Listing models proves the key without sending a prompt.
+                _ = try await ProviderAPI.listModels(configuration.provider, key: key)
+                return AIAccountStatus(signedIn: true, message: "API key works")
+            } catch {
+                return AIAccountStatus(signedIn: false, message: error.localizedDescription)
+            }
         default: break
         }
         guard let executable = AICommand.executable(configuration) else {
@@ -94,7 +105,7 @@ public extension AIProviderKind {
         case .cursor: "curl -fsSL https://cursor.com/install | bash"
         case .opencode: "curl -fsSL https://opencode.ai/install | bash"
         case .ollama: "if command -v brew >/dev/null 2>&1; then brew install --cask ollama-app && open -a Ollama; else open https://ollama.com/download/mac; fi"
-        case .apple: nil
+        case .apple, .openAIAPI, .anthropicAPI, .geminiAPI: nil
         }
     }
 }
