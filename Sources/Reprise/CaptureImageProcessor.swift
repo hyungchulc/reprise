@@ -23,7 +23,12 @@ struct PreparedCapture: Sendable {
 }
 
 // Serial actor bounds image encoding and Vision to the single caller-owned frame.
+/// Every Vision text request in Reprise runs on the shared instance, one at a time. Two requests at
+/// once, from capture and from reading older screens again, deadlocked inside Vision and stopped
+/// capture for good (0.8.1-alpha.1 and alpha.2).
 actor CaptureImageProcessor {
+    static let shared = CaptureImageProcessor()
+
     /// `ignoringTopRows` covers the menu bar. Its clock and live status items change on their own, so
     /// they neither make a screen new nor enter the searchable text; the saved image still shows them.
     func prepare(image: CGImage, root: URL, cipher: VaultCipher, settings: CaptureSettings, previousFingerprint: String?,

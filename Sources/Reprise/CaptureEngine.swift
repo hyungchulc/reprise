@@ -15,7 +15,7 @@ final class CaptureEngine: ObservableObject {
 
     private let store: MomentStore
     private let root: URL
-    private let processor = CaptureImageProcessor()
+    private let processor = CaptureImageProcessor.shared
     private let browser = BrowserURLReader()
     private var loop: Task<Void, Never>?
     private var busy = false

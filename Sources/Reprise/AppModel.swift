@@ -915,7 +915,7 @@ final class AppModel: ObservableObject {
         return VaultKeys(master: try VaultKeychain.create(root: root, trusting: programs))
     }
 
-    func shutdown() { heartbeat?.cancel(); askTask?.cancel(); scrubTask?.cancel(); archiveTask?.cancel(); meetingDetector.stop() }
+    func shutdown() { heartbeat?.cancel(); askTask?.cancel(); scrubTask?.cancel(); archiveTask?.cancel(); rereadTask?.cancel(); meetingDetector.stop() }
 
     /// Quit and pause close the session; a power-off with recording on resumes it at the next launch.
     func endCaptureSession(poweringOff: Bool) {
@@ -957,9 +957,11 @@ final class AppModel: ObservableObject {
         let store = self.store, root = self.root, cipher = self.cipher, languages = settings.ocrLanguages
         let menuBar = NSScreen.main.map { ($0.frame.maxY - $0.visibleFrame.maxY) / max(1, $0.frame.height) } ?? 0
         Task { screensToReread = (try? await store.screensNeedingTextCount()) ?? 0 }
-        rereadTask = Task.detached(priority: .background) { [weak self] in
+        // Utility, not background: a background-priority Vision request beside a capture stalled both.
+        rereadTask = Task.detached(priority: .utility) { [weak self] in
             do { try await Task.sleep(for: .seconds(60)) } catch { return }
-            let reader = CaptureImageProcessor()
+            // Capture's own processor, so this never runs Vision at the same time as a capture.
+            let reader = CaptureImageProcessor.shared
             var movie: (path: String, frames: FrameReader)?
             func text(of moment: Moment) async -> String? {
                 var image: CGImage?
@@ -1079,7 +1081,7 @@ final class AppModel: ObservableObject {
 
 actor ImageImporter {
     static let shared = ImageImporter()
-    func importFile(_ url: URL, root: URL, cipher: VaultCipher) throws -> Moment {
+    func importFile(_ url: URL, root: URL, cipher: VaultCipher) async throws -> Moment {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 2400, kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else {
             throw CocoaError(.fileReadCorruptFile)
@@ -1092,10 +1094,8 @@ actor ImageImporter {
         CGImageDestinationAddImage(encoder, image, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
         guard CGImageDestinationFinalize(encoder) else { throw CocoaError(.fileWriteUnknown) }
         try cipher.write(encoded as Data, to: destination)
-        let request = VNRecognizeTextRequest(); request.recognitionLevel = .accurate; request.automaticallyDetectsLanguage = true
-        request.recognitionLanguages = ScreenTextLanguages.hints(["en-US", "ko-KR"])
-        try VNImageRequestHandler(cgImage: image).perform([request])
-        let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+        let text = try await CaptureImageProcessor.shared.recognizeText(in: image, languages: ["en-US", "ko-KR"],
+                                                                        textScaleLimit: max(image.width, image.height))
         let attributes = try url.resourceValues(forKeys: [.contentModificationDateKey])
         let size = (try FileManager.default.attributesOfItem(atPath: destination.path)[.size] as? NSNumber)?.int64Value ?? 0
         return Moment(id: id, timestamp: attributes.contentModificationDate ?? Date(), appName: "Imported", windowTitle: url.lastPathComponent, text: text, imagePath: relative, thumbnailPath: relative, byteCount: size)

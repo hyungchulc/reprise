@@ -22,7 +22,9 @@ secret-like query values, and the address is indexed with the title and text. Vi
 on-device OCR with automatic language detection, Korean, Japanese and Chinese hints first;
 image encoding/deduplication runs off the main actor. Screens read before 0.8.1 put
 English first and lost Korean text; they have no `text_revision` and are read again in
-the background, newest first, one at a time, waiting while on battery. Full-size
+the background, newest first, one at a time, waiting while on battery. All Vision text
+requests (capture, re-reading, imports) run one at a time on one actor at utility priority
+or higher: a background-priority request beside a capture's stalled Vision in 0.8.1-alpha.1. Full-size
 images and thumbnails are separate. After 15 minutes, `FrameArchiver` moves full-size
 stills of one pixel size into HEVC movies (frame i at i seconds, keyframes every 30
 frames) and points each row at its movie and frame time in one transaction; a movie is

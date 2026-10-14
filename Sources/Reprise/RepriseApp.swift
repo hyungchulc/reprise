@@ -1,7 +1,21 @@
 import AppKit
+import os
 import SwiftUI
 import RepriseCore
 import UserNotifications
+
+/// Waits for `operation` at most `seconds`. A capture stuck inside a system framework must not keep
+/// Reprise from quitting or installing an update.
+@MainActor func waitAtMost(_ seconds: Double, _ operation: @escaping @MainActor () async -> Void) async {
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        let done = OSAllocatedUnfairLock(initialState: false)
+        let finish = { @Sendable in
+            if done.withLock({ finished in defer { finished = true }; return !finished }) { continuation.resume() }
+        }
+        Task { @MainActor in await operation(); finish() }
+        Task { try? await Task.sleep(for: .seconds(seconds)); finish() }
+    }
+}
 
 @main
 struct RepriseApp: App {
@@ -90,7 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             UserDefaults.standard.set(model.capture.isRecording, forKey: "resumeCaptureAfterRestart")
             model.showSettings = false
             model.shutdown()
-            await model.capture.stop()
+            await waitAtMost(5) { await model.capture.stop() }
             await model.meeting.stop()
             model.meeting.cancelTranscription()
         }
@@ -142,7 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Return to the main queue before awaiting MainActor capture/audio cleanup.
         // terminateLater can enter a nested AppKit loop inside this dispatch block.
         terminationTask = Task {
-            await model.capture.stop()
+            await waitAtMost(5) { await model.capture.stop() }
             await model.meeting.stop()
             terminationReady = true
             terminationTask = nil

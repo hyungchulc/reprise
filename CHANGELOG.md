@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1-alpha.3
+
+- **Recording no longer stops a minute after launch.** In 0.8.1-alpha.1 and alpha.2,
+  reading older screens again ran text recognition at background priority beside the
+  capture's own; Vision stalled both, so no screen was saved after the first minute and
+  quitting or updating could hang. All text recognition now runs one request at a time
+  at utility priority, and quitting or updating waits at most five seconds for capture.
+
 ## 0.8.1-alpha.2
 
 - **Answers no longer fail over citation slips.** An answer that wrote a label in
