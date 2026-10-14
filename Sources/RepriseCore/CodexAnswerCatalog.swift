@@ -23,6 +23,22 @@ enum CodexAnswerCatalog {
     return slug
   }
 
+  /// Reasoning levels the model lists, lowest first; a blank model means the catalog's default.
+  static func reasoningLevels(model: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [String] {
+    let url = home.appendingPathComponent(".codex/models_cache.json")
+    guard (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map({ $0 > 0 && $0 <= 4 * 1024 * 1024 }) == true,
+      let cache = try? JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
+      let models = cache["models"] as? [[String: Any]],
+      let slug = model.isEmpty ? try? self.model(requested: "") : model,
+      let entry = models.first(where: { $0["slug"] as? String == slug })
+    else { return [] }
+    let levels = (entry["supported_reasoning_levels"] as? [Any] ?? []).compactMap { level -> String? in
+      let name = (level as? [String: Any])?["effort"] as? String ?? level as? String
+      return name.flatMap { $0.count <= 16 && $0.allSatisfy { $0.isASCII && $0.isLetter } ? $0 : nil }
+    }
+    return levels
+  }
+
   static func data(home: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> Data {
     let url = home.appendingPathComponent(".codex/models_cache.json")
     let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0

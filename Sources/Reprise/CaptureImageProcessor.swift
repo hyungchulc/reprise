@@ -37,21 +37,14 @@ actor CaptureImageProcessor {
                 .map { String(format: "%02x", $0) }.joined()
             if fingerprint == previousFingerprint { return nil }
             try Task.checkCancellation()
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-            request.regionOfInterest = CGRect(x: 0, y: 0, width: 1, height: 1 - Double(band) / Double(image.height))
             var ocrWarning: String?
+            let text: String
             do {
-                let supported = try request.supportedRecognitionLanguages()
-                request.recognitionLanguages = settings.ocrLanguages.filter { supported.contains($0) }
-                if request.recognitionLanguages.isEmpty { request.recognitionLanguages = ["en-US"] }
-                let ocrImage = resized(image, maxDimension: max(1_280, textScaleLimit)) ?? image
-                try VNImageRequestHandler(cgImage: ocrImage).perform([request])
+                text = try recognizeText(in: image, languages: settings.ocrLanguages, ignoringTopRows: band, textScaleLimit: textScaleLimit)
             } catch {
+                text = ""
                 ocrWarning = "Image saved, OCR unavailable: \(error.localizedDescription)"
             }
-            let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
             try Task.checkCancellation()
             let directory = root.appendingPathComponent("captures", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -88,6 +81,22 @@ actor CaptureImageProcessor {
                 throw error
             }
         }
+    }
+
+    /// Vision reads each block in the language it detects. A fixed list read everything with its
+    /// first language: English first dropped Korean, Korean first lost Swedish å, ä and ö.
+    func recognizeText(in image: CGImage, languages: [String], ignoringTopRows band: Int = 0, textScaleLimit: Int = 2_400) throws -> String {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+        request.automaticallyDetectsLanguage = true
+        let band = min(max(0, band), image.height - 1)
+        request.regionOfInterest = CGRect(x: 0, y: 0, width: 1, height: 1 - Double(band) / Double(image.height))
+        let supported = try request.supportedRecognitionLanguages()
+        request.recognitionLanguages = ScreenTextLanguages.hints(languages.filter { supported.contains($0) })
+        let ocrImage = resized(image, maxDimension: max(1_280, textScaleLimit)) ?? image
+        try VNImageRequestHandler(cgImage: ocrImage).perform([request])
+        return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
     }
 
     func remove(_ result: PreparedCapture, root: URL) {

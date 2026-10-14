@@ -105,6 +105,10 @@ struct SettingsView: View {
             Picker("Text recognition", selection: Binding(get: { model.settings.ocrLanguages.joined(separator: ",") }, set: { model.settings.ocrLanguages = $0.components(separatedBy: ",") })) {
                 Text("English & Korean").tag("en-US,ko-KR"); Text("English").tag("en-US"); Text("Korean").tag("ko-KR"); Text("Swedish & English").tag("sv-SE,en-US")
             }
+            if model.screensToReread > 0 {
+                Text("Reading text again in \(model.screensToReread) earlier screens. Versions before 0.8.1 missed Korean text. This runs slowly in the background and waits while on battery.")
+                    .repriseFont(.caption).foregroundStyle(.secondary)
+            }
             Toggle("Skip unchanged screens", isOn: $model.settings.deduplicate)
             Toggle("Pause on battery", isOn: $model.settings.pauseOnBattery)
             LabeledContent("Pause when idle", value: "5 minutes")
@@ -260,12 +264,11 @@ struct AISettings: View {
     @State private var downloadName = Ollama.suggestedModels[0].id
     private var kind: AIProviderKind { model.provider.provider }
     private var selection: Binding<String> {
-        Binding(get: {
-            if customModel || (!model.provider.model.isEmpty && !model.availableModels.contains(where: { $0.id == model.provider.model })) { return "__custom" }
-            return model.provider.model
-        }, set: { value in
+        // The model list loads after the sign-in check, so a saved model stays a choice of its own
+        // until then; the identifier field opens only when Custom model is picked.
+        Binding(get: { customModel ? "__custom" : model.modelChoice }, set: { value in
             customModel = value == "__custom"
-            if !customModel { model.provider.model = value; Task { await model.saveSettings() } }
+            if !customModel { model.chooseModel(value) }
         })
     }
     private var installed: Bool { model.providerStatus?.isInstalled == true }
@@ -277,12 +280,17 @@ struct AISettings: View {
             Text(Self.about(kind)).repriseFont(.caption).foregroundStyle(.secondary)
             if kind != .apple {
                 Picker("Model", selection: selection) {
-                    Text(kind == .opencode ? "Space Bunny (free, not kept)" : kind == .ollama ? "First downloaded model"
-                         : kind == .gemini ? "Gemini Flash, light thinking (fast)" : "Current provider default").tag("")
-                    ForEach(model.availableModels) { Text($0.name).tag($0.id) }
+                    Text(model.defaultModelLabel).tag("")
+                    ForEach(model.modelChoices) { Text($0.name).tag($0.id) }
+                    if model.modelChoiceUnlisted { Text(model.modelLabel).tag(model.modelChoice) }
                     Text("Custom model...").tag("__custom")
                 }
-                if selection.wrappedValue == "__custom" { TextField("Model identifier", text: $model.provider.model).textFieldStyle(.roundedBorder) }
+                if customModel { TextField("Model identifier", text: $model.provider.model).textFieldStyle(.roundedBorder) }
+                if !model.thinkingChoices.isEmpty {
+                    Picker("Thinking", selection: Binding(get: { model.thinkingChoice }, set: { model.chooseThinking($0) })) {
+                        ForEach(model.thinkingChoices) { Text($0.name).tag($0.id) }
+                    }
+                }
             }
             LabeledContent("Account", value: model.accountStatus?.message ?? "Checking...")
             LabeledContent("Search", value: model.providerStatus?.canAnswer == true ? "Available" : (model.providerStatus?.message ?? "Checking..."))

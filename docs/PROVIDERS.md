@@ -59,8 +59,14 @@ executable path. Arguments are passed to Foundation Process as an array.
 | Ollama | `/api/version`, `/api/tags`, `/api/show`, `/api/chat` on 127.0.0.1:11434 | Answering implemented; tool calls rejected |
 | Apple | FoundationModels `SystemLanguageModel` on macOS 26 | Answering implemented in process; no tools are registered |
 
+Thinking levels: Claude, Codex and Grok take the level as a flag, high unless another
+is chosen; Codex offers the levels its model catalog lists for the model. Gemini and
+Cursor name the level in the model identifier, so the search bar and Settings group
+their models into families and choose the level within one. OpenCode, Ollama and Apple
+have no level to choose.
+
 Claude runs with `--print --output-format json --safe-mode --restricted --tools ""`,
-an explicit answer/citations JSON schema, high reasoning effort,
+an explicit answer/citations JSON schema, the chosen `--effort` level,
 an empty strict MCP configuration, disabled slash commands, no Chrome integration,
 no session persistence, `dontAsk` permission mode, and `disableAllHooks`.
 Its replacement system prompt restricts the response to explicitly supplied
@@ -71,7 +77,7 @@ of benign runtime environment variables, so API keys and billing overrides from
 the app environment are not inherited.
 
 Codex runs `exec --json --ephemeral --ignore-user-config --ignore-rules` with a
-read-only sandbox, never-approve policy, high reasoning, OpenAI subscription
+read-only sandbox, never-approve policy, the chosen reasoning level, OpenAI subscription
 provider, disabled web search and disabled capability features (shell, apps,
 plugins, hooks, browser, computer, images, memory, subagents and code mode).
 It also uses the documented `model_catalog_json` setting from the
@@ -88,7 +94,7 @@ visible catalog's highest-priority model. No generation is permanently pinned.
 The provider JSON schema lives only in the temporary process directory.
 
 Grok runs a single prompt file with `--tools "" --deny '*'`, removes the
-always-on MCP meta-tools, disables web search/subagents, uses high reasoning,
+always-on MCP meta-tools, disables web search/subagents, uses the chosen reasoning effort,
 `dontAsk`, `--verbatim`, and the JSON schema. The prompt file uses the documented
 ACP content envelope, not an untyped JSON object. Temporary
 `HOME` and `GROK_HOME` isolate global config, hooks, plugins, MCP, skills and
@@ -183,10 +189,15 @@ Settings downloads a suggested model (EXAONE 3.5 2.4B for Korean, Qwen 3.5 4B, G
 `MemorySearch.search(question:configuration:filter:timeZone:conversation:)` first
 asks the provider for up to eight keyword alternatives, optional date/kind bounds,
 and a focused or activity-overview scope. The question, current instant, timezone
-and bounded prior conversation enter planning. JSON
-is validated for exact fields, bounded literal terms, explicit date offsets,
-valid local calendar dates and ordered bounds. Whole local days use the
-provided timezone (including DST); planned end bounds are exclusive.
+and bounded prior conversation enter planning. The plan must carry its four fields
+and a terms array; the rest is read leniently, because small on-device models get
+details wrong. Unusable terms, dates and kinds are dropped, a local time without a
+zone uses the provided timezone, and an end day on or before a whole-day start means
+through that day (`since` and `until` both 2026-10-14 is that day). When a first
+question's plan has no dates, its time words (오늘, 어제 저녁, last week) set them.
+Whole local days use the provided timezone (including DST); planned end bounds are
+exclusive. If a planned kind finds nothing and no kind filter is visible, the search
+runs once more without it.
 
 Each alternative is queried independently against the entire local FTS index,
 avoiding a natural-language question ANDed into zero matches. Words of two or more

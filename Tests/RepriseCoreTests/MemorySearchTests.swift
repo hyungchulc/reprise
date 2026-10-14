@@ -31,7 +31,7 @@ final class MemorySearchTests: XCTestCase {
         XCTAssertTrue(excluded.moments.isEmpty)
         XCTAssertNil(excluded.coverage)
         XCTAssertTrue(try plan(["terms": [], "scope": "overview"]).isOverview)
-        XCTAssertThrowsError(try plan(["scope": "invented"]))
+        XCTAssertFalse(try plan(["scope": "invented"]).isOverview)
     }
 
     func testFollowUpRehydratesOriginalEvidenceWithinCurrentFilters() async throws {
@@ -91,6 +91,13 @@ final class MemorySearchTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try MomentStore(root: root, keys: testKeys)
         try await store.insert(Moment(id: "synthetic-evidence", appName: "Synthetic Verification", windowTitle: "Test record", text: "In this synthetic test record, the validation code for Project Marigold is 714. This is not a real personal memory."))
+        if let question = ProcessInfo.processInfo.environment["REPRISE_VERIFY_QUESTION"] {
+            try await store.insert(Moment(id: "synthetic-today", timestamp: Date().addingTimeInterval(-600), appName: "Notes", windowTitle: "메모",
+                                          text: "오늘 회의에서 예산 초안을 검토했고 금요일까지 수정하기로 했다. This is a synthetic test record."))
+            let result = try await MemorySearch(store: store, client: AIClient()).search(question: question, configuration: AIProviderConfiguration(provider: kind))
+            print("ANSWER", result.response.text)
+            return
+        }
         let result = try await MemorySearch(store: store, client: AIClient()).search(question: "What was the validation code for Project Marigold?", configuration: AIProviderConfiguration(provider: kind))
         XCTAssertTrue(result.response.text.contains("714"))
         XCTAssertEqual(result.moments.map(\.id), ["synthetic-evidence"])
@@ -104,12 +111,29 @@ final class MemorySearchTests: XCTestCase {
         return try MemorySearchPlan(payload: payload, timeZone: TimeZone(identifier: "Europe/Stockholm")!)
     }
 
-    func testPlanRejectsInvalidBoundsAndTypes() throws {
-        XCTAssertThrowsError(try plan(["terms": [" "]]))
-        XCTAssertThrowsError(try plan(["since": "2026-02-30"]))
-        XCTAssertThrowsError(try plan(["since": "2026-10-13", "until": "2026-10-12"]))
-        XCTAssertThrowsError(try plan(["kind": "invented"]))
-        XCTAssertThrowsError(try plan(["since": "2026-10-13T10:00:00"]))
+    func testPlanKeepsUsableFieldsAndRepairsSameDayRanges() throws {
+        XCTAssertThrowsError(try MemorySearchPlan(payload: ["terms": ["budget"]], timeZone: .current))
+        XCTAssertThrowsError(try plan(["terms": "budget"]))
+        let blank = try plan(["terms": [" "]])
+        XCTAssertTrue(blank.terms.isEmpty)
+        XCTAssertTrue(blank.isOverview)
+        XCTAssertNil(try plan(["since": "2026-02-30"]).since)
+        XCTAssertNil(try plan(["kind": "invented"]).kind)
+        // On-device models answer "today" as since and until the same day.
+        let sameDay = try plan(["since": "2026-10-14", "until": "2026-10-14"])
+        XCTAssertEqual(sameDay.until!.timeIntervalSince(sameDay.since!), 24 * 3600)
+        let reversed = try plan(["since": "2026-10-13", "until": "2026-10-12"])
+        XCTAssertNotNil(reversed.since)
+        XCTAssertNil(reversed.until)
+        XCTAssertEqual(try plan(["since": "2026-10-13T10:00:00"]).since, ISO8601DateFormatter().date(from: "2026-10-13T08:00:00Z"))
+    }
+
+    func testQuestionTimeWordsFillAMissingRange() throws {
+        var searchPlan = try plan(["terms": ["회의"]])
+        let now = ISO8601DateFormatter().date(from: "2026-10-14T13:30:00Z")!
+        searchPlan.fillTime(from: "어제 회의 뭐였지?", now: now, timeZone: TimeZone(identifier: "Europe/Stockholm")!)
+        XCTAssertEqual(searchPlan.since, ISO8601DateFormatter().date(from: "2026-10-12T22:00:00Z"))
+        XCTAssertEqual(searchPlan.until, ISO8601DateFormatter().date(from: "2026-10-13T22:00:00Z"))
     }
 
     func testVisibleFiltersRemainHardConstraintsIncludingFallback() async throws {

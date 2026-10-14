@@ -95,6 +95,17 @@ public struct UsageEntry: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+/// Language hints for screen text. Recognition detects each block's language itself; the chosen
+/// languages only guide it, with Chinese, Japanese and Korean first because their models also
+/// read Latin letters.
+public enum ScreenTextLanguages {
+    static let wideScripts: Set<String> = ["ko", "ja", "zh", "yue"]
+    public static func hints(_ languages: [String]) -> [String] {
+        func wide(_ code: String) -> Bool { wideScripts.contains(String(code.prefix { $0 != "-" }).lowercased()) }
+        return languages.filter(wide) + languages.filter { !wide($0) }
+    }
+}
+
 public struct CaptureSettings: Codable, Equatable, Sendable {
     public var interval: Double = 3
     public var maxDimension: Int = 0

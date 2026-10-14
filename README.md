@@ -64,14 +64,17 @@ downloaded-installation test on every supported macOS version.
 | Timeline | Full-screen overlay, app icons and icon-derived colors, calendar, compressed recording gaps, 30-second navigation |
 | Search | Local keyword search that also matches Korean words with particles, AI query planning, source-linked answers, follow-up questions, saved conversations |
 | Meetings | Explicit microphone recording, optional system audio, post-recording on-device transcription in up to five languages at once, automatic summaries with decisions and action items, inline playback and timestamp seeking |
-| AI providers | Claude, Codex, Gemini, Grok, Cursor and OpenCode (free models) through their CLIs; Apple's on-device model and Ollama on your Mac; install and sign-in from Settings, model selection and reported token usage |
+| AI providers | Claude, Codex, Gemini, Grok, Cursor and OpenCode (free models) through their CLIs; Apple's on-device model and Ollama on your Mac; install and sign-in from Settings, model and thinking-level menus in search, and reported token usage |
 | MCP | Opt-in read-only memory search for Claude Desktop, Claude Code, Codex, Cursor and compatible local clients |
 | Appearance | System/custom accent, system/manual light and dark modes, text size, transitions and optional edge glow |
 | Controls | Editable global shortcut, Dock/menu bar placement, launch options, pause reminders, exclusions and retention |
 | Updates | Sparkle checks a signed feed and downloads signed archives from GitHub Releases |
 
 The default shortcut is **Command + Shift + Space**. It opens focused search in
-the memory overlay. Escape first collapses search, then closes the overlay.
+the memory overlay. Escape first closes search, and the next search starts fresh (a
+search still answering is kept), then closes the overlay. Time words such as today,
+yesterday evening, last week or 10월 13일 show that time, spread across it; other
+words search the text inside it.
 Recent conversations restore saved answers and citations without another AI call.
 Audio search results expand in place, and recordings have a waveform timeline lane.
 

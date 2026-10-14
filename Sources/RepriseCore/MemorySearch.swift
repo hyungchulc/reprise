@@ -83,11 +83,22 @@ public actor MemorySearch {
       input: input, schema: MemorySearchPlan.schema,
       systemPrompt: MemorySearchPlan.instructions, configuration: configuration)
     do {
-      let plan = try MemorySearchPlan(payload: planned.payload, timeZone: timeZone)
-      let overview = plan.isOverview ? try await store.activityOverview(plan.query(text: "", limit: 96, filter: filter)) : nil
-      let candidates: [Moment]
-      if let overview { candidates = overview.moments }
-      else { candidates = try await retrieve(plan: plan, filter: filter, conversation: conversation) }
+      var plan = try MemorySearchPlan(payload: planned.payload, timeZone: timeZone)
+      // Follow-ups lean on the conversation's day, which only the model sees.
+      if conversation.isEmpty { plan.fillTime(from: question, now: now, timeZone: timeZone) }
+      func gather(_ plan: MemorySearchPlan) async throws -> (MemoryOverview?, [Moment]) {
+        if plan.isOverview {
+          let overview = try await store.activityOverview(plan.query(text: "", limit: 96, filter: filter))
+          return (overview, overview.moments)
+        }
+        return (nil, try await retrieve(plan: plan, filter: filter, conversation: conversation))
+      }
+      var (overview, candidates) = try await gather(plan)
+      // The plan's kind is a guess; when it finds nothing, look at every kind the filters allow.
+      if candidates.isEmpty, plan.kind != nil, filter.kind == nil {
+        plan.kind = nil
+        (overview, candidates) = try await gather(plan)
+      }
       try Task.checkCancellation()
       if candidates.isEmpty {
         return MemorySearchResult(response: AIResponse(text: "No matching memories were found in this search. Try another date or phrase.", citations: [], usage: planned.usage), moments: [], usage: [planned.usage])
@@ -194,11 +205,11 @@ public actor MemorySearch {
 }
 
 struct MemorySearchPlan {
-  let terms: [String]
-  let since: Date?
-  let until: Date?
-  let kind: String?
-  let isOverview: Bool
+  var terms: [String]
+  var since: Date?
+  var until: Date?
+  var kind: String?
+  var isOverview: Bool
 
   static let schema =
     #"{"type":"object","properties":{"terms":{"type":"array","items":{"type":"string"},"maxItems":8},"since":{"type":["string","null"]},"until":{"type":["string","null"]},"kind":{"type":["string","null"],"enum":["screen","meeting",null]},"scope":{"type":"string","enum":["focused","overview"]}},"required":["terms","since","until","kind","scope"],"additionalProperties":false}"#
@@ -228,38 +239,52 @@ struct MemorySearchPlan {
     evening 18:00 to the next midnight. Apply both since and until, with the correct local offset.
     """
 
+  /// A plan is the model's suggestion. Its shape must be right, but a field it got wrong, such
+  /// as an empty term or a date it could not write, is dropped rather than failing the search;
+  /// small on-device models make these mistakes often. Dropping a field never widens the
+  /// visible filters, which `query` still applies.
   init(payload: [String: Any], timeZone: TimeZone) throws {
     let required: Set<String> = ["terms", "since", "until", "kind"]
-    guard required.isSubset(of: Set(payload.keys)), Set(payload.keys).isSubset(of: required.union(["scope"])),
-      let rawTerms = payload["terms"] as? [String], rawTerms.count <= 8
-    else { throw AIProviderError.invalidResponse }
+    guard required.isSubset(of: Set(payload.keys)), let rawTerms = payload["terms"] as? [Any] else {
+      throw AIProviderError.invalidResponse
+    }
     var seen = Set<String>()
     var terms: [String] = []
-    for term in rawTerms {
+    for case let term as String in rawTerms.prefix(8) {
       let term = term.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !term.isEmpty, term.utf8.count <= 160,
         !term.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
         term.unicodeScalars.contains(where: CharacterSet.alphanumerics.contains)
-      else {
-        throw AIProviderError.invalidResponse
-      }
+      else { continue }
       if seen.insert(term.lowercased()).inserted { terms.append(term) }
     }
     self.terms = terms
-    if let scope = payload["scope"] {
-      guard let scope = scope as? String, ["focused", "overview"].contains(scope) else { throw AIProviderError.invalidResponse }
+    if let scope = payload["scope"] as? String, ["focused", "overview"].contains(scope) {
       self.isOverview = scope == "overview"
     } else { self.isOverview = terms.isEmpty }
-    self.since = try Self.date(payload["since"], timeZone: timeZone)
-    self.until = try Self.date(payload["until"], timeZone: timeZone)
-    if let since, let until, since >= until { throw AIProviderError.invalidResponse }
-    if let kind = payload["kind"] as? String {
-      guard ["screen", "meeting"].contains(kind) else { throw AIProviderError.invalidResponse }
-      self.kind = kind
-    } else {
-      guard payload["kind"] is NSNull else { throw AIProviderError.invalidResponse }
-      self.kind = nil
+    let since = Self.date(payload["since"], timeZone: timeZone)
+    var until = Self.date(payload["until"], timeZone: timeZone)
+    // "since 2026-10-14, until 2026-10-14" means that whole day.
+    if let start = since?.date, let end = until, end.date <= start, end.wholeDay {
+      var calendar = Calendar(identifier: .gregorian)
+      calendar.timeZone = timeZone
+      until = calendar.date(byAdding: .day, value: 1, to: end.date).map { ($0, true) }
     }
+    if let start = since?.date, let end = until?.date, start >= end { until = nil }
+    self.since = since?.date
+    self.until = until?.date
+    let kind = payload["kind"] as? String
+    self.kind = kind.flatMap { ["screen", "meeting"].contains($0) ? $0 : nil }
+  }
+
+  /// The question's own time words (오늘, 어제 저녁, last week) when the model gave no dates.
+  mutating func fillTime(from question: String, now: Date, timeZone: TimeZone) {
+    guard since == nil, until == nil else { return }
+    var calendar = Calendar.current
+    calendar.timeZone = timeZone
+    guard let time = QuickSearchTime.parse(question, now: now, calendar: calendar) else { return }
+    since = time.interval.start
+    until = time.interval.end
   }
 
   func query(text: String, limit: Int, filter: MomentQuery = MomentQuery()) -> MomentQuery {
@@ -272,11 +297,10 @@ struct MemorySearchPlan {
       kind: filter.kind ?? kind, limit: limit)
   }
 
-  private static func date(_ value: Any?, timeZone: TimeZone) throws -> Date? {
-    if value is NSNull { return nil }
-    guard let text = value as? String, text.utf8.count <= 40 else {
-      throw AIProviderError.invalidResponse
-    }
+  /// A local whole day (YYYY-MM-DD) or an ISO 8601 time with an explicit offset, so a plan cannot
+  /// silently use the host's UTC default. Anything else is no bound.
+  private static func date(_ value: Any?, timeZone: TimeZone) -> (date: Date, wholeDay: Bool)? {
+    guard let text = value as? String, text.utf8.count <= 40 else { return nil }
     if text.count == 10 {
       let formatter = DateFormatter()
       formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -284,18 +308,24 @@ struct MemorySearchPlan {
       formatter.timeZone = timeZone
       formatter.dateFormat = "yyyy-MM-dd"
       formatter.isLenient = false
-      if let date = formatter.date(from: text), formatter.string(from: date) == text { return date }
-    } else {
-      let formatter = ISO8601DateFormatter()
-      // An explicit offset is required, so a plan cannot accidentally use the host's UTC default.
-      if text.hasSuffix("Z")
-        || text.range(of: #"[+-][0-9]{2}:[0-9]{2}$"#, options: .regularExpression) != nil
-      {
-        if let date = formatter.date(from: text) { return date }
-        formatter.formatOptions.insert(.withFractionalSeconds)
-        if let date = formatter.date(from: text) { return date }
+      if let date = formatter.date(from: text), formatter.string(from: date) == text { return (date, true) }
+    } else if text.range(of: #"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?$"#, options: .regularExpression) != nil {
+      // A local time without a zone means the Mac's own clock.
+      let formatter = DateFormatter()
+      formatter.locale = Locale(identifier: "en_US_POSIX")
+      formatter.calendar = Calendar(identifier: .gregorian)
+      formatter.timeZone = timeZone
+      formatter.isLenient = false
+      for format in ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm"] {
+        formatter.dateFormat = format
+        if let date = formatter.date(from: text), formatter.string(from: date) == text { return (date, false) }
       }
+    } else if text.hasSuffix("Z") || text.range(of: #"[+-][0-9]{2}:[0-9]{2}$"#, options: .regularExpression) != nil {
+      let formatter = ISO8601DateFormatter()
+      if let date = formatter.date(from: text) { return (date, false) }
+      formatter.formatOptions.insert(.withFractionalSeconds)
+      if let date = formatter.date(from: text) { return (date, false) }
     }
-    throw AIProviderError.invalidResponse
+    return nil
   }
 }

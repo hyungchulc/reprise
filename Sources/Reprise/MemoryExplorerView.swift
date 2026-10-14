@@ -243,7 +243,7 @@ struct MemoryExplorerView: View {
                             inlineAudio(moment)
                         }
                         if !model.displayedMatches.isEmpty {
-                            Text(model.response == nil ? "\(model.displayedMatches.count) memories" : "\(model.displayedMatches.count) supporting memories").repriseFont(.caption).foregroundStyle(.secondary)
+                            Text(model.response == nil ? matchCountLabel : "\(model.displayedMatches.count) supporting memories").repriseFont(.caption).foregroundStyle(.secondary)
                             ForEach(model.displayedMatches.filter { $0.kind == "meeting" }) { moment in
                                 if expandedAudioID == moment.id, model.selection?.id == moment.id {
                                     inlineAudio(model.selection ?? moment)
@@ -287,7 +287,7 @@ struct MemoryExplorerView: View {
                                     }.buttonStyle(.plain).help("Open \(moment.appName) memory")
                                 }
                             }
-                        } else if hasQuery && model.response == nil && model.searchError == nil && model.searchNotice == nil { Text("No local text matches").repriseFont().foregroundStyle(.secondary) }
+                        } else if hasQuery && model.response == nil && model.searchError == nil && model.searchNotice == nil { Text(noMatchesLabel).repriseFont().foregroundStyle(.secondary) }
                     }
                 }.transition(.opacity)
                 Divider().padding(.horizontal, 16)
@@ -308,15 +308,47 @@ struct MemoryExplorerView: View {
                 Toggle(isOn: Binding(get: { model.mode == "meetings" }, set: { model.mode = $0 ? "meetings" : "all" })) { Label("Audio", systemImage: "waveform") }.toggleStyle(.button)
                 Spacer()
                 Menu {
-                    ForEach(AIProviderKind.allCases) { provider in Button(provider.displayName) { model.selectProvider(provider) } }
+                    Picker("Provider", selection: Binding(get: { model.provider.provider }, set: { model.selectProvider($0) })) {
+                        ForEach(AIProviderKind.allCases) { provider in Text(provider.displayName).tag(provider) }
+                    }.pickerStyle(.inline).labelsHidden()
                     Divider()
-                    Text(model.provider.model.isEmpty ? "Current provider default" : model.provider.model)
-                    Button("Model Settings...") { model.settingsPage = "AI & Models"; model.showSettings = true }
-                } label: { Label(model.provider.provider.displayName, systemImage: "sparkles") }.fixedSize()
+                    Button("AI Settings...") { model.settingsPage = "AI & Models"; model.showSettings = true }
+                } label: { Label(model.provider.provider.displayName, systemImage: "sparkles") }.fixedSize().help("AI provider")
+                if model.provider.provider != .apple {
+                    Menu {
+                        Picker("Model", selection: Binding(get: { model.modelChoice }, set: { model.chooseModel($0) })) {
+                            Text(model.defaultModelLabel).tag("")
+                            ForEach(model.modelChoices) { choice in Text(choice.name).tag(choice.id) }
+                            if model.modelChoiceUnlisted { Text(model.modelLabel).tag(model.modelChoice) }
+                        }.pickerStyle(.inline).labelsHidden()
+                        if model.modelChoices.isEmpty { Text(model.checkingProvider ? "Loading models..." : "No other models listed") }
+                    } label: { Label(Self.short(model.modelLabel), systemImage: "cpu") }.fixedSize().help("Model: \(model.modelLabel)")
+                }
+                if !model.thinkingChoices.isEmpty {
+                    Menu {
+                        Picker("Thinking", selection: Binding(get: { model.thinkingChoice }, set: { model.chooseThinking($0) })) {
+                            ForEach(model.thinkingChoices) { choice in Text(choice.name).tag(choice.id) }
+                        }.pickerStyle(.inline).labelsHidden()
+                    } label: {
+                        Label(model.thinkingChoices.first { $0.id == model.thinkingChoice }?.name ?? "Thinking", systemImage: "brain")
+                    }.fixedSize().help("Thinking level")
+                }
                 Button { searchExpanded = false; searchFocused = false } label: { Image(systemName: "chevron.down") }.help("Minimize search")
             }.repriseFont(.caption).buttonStyle(.borderless).padding(.horizontal, 16).padding(.bottom, 11)
         }.modifier(GlassSurface())
     }
+
+    private var matchCountLabel: String {
+        let shown = model.displayedMatches.count
+        guard let time = model.searchTime else { return "\(shown) memories" }
+        if let total = model.searchTimeTotal, total > shown { return "\(time.label) · \(shown) of \(total) memories" }
+        return "\(time.label) · \(shown) memories"
+    }
+    private var noMatchesLabel: String {
+        guard let time = model.searchTime else { return "No local text matches" }
+        return time.text.isEmpty ? "\(time.label) · no memories" : "\(time.label) · no text matches"
+    }
+    private static func short(_ name: String) -> String { name.count > 28 ? name.prefix(27) + "…" : name }
 
     private func conversationTurn(_ turn: MemorySearchTurn) -> some View {
         VStack(alignment: .leading, spacing: 10) {

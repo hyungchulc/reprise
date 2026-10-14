@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.8.1-alpha.1
+
+- **Korean screen text.** Text recognition put English first, which dropped or garbled
+  Korean, so Korean words on screen could not be found. Recognition now detects the
+  language itself and reads Korean, English and Swedish on the same screen. Screens
+  saved before this version are read again in the background, newest first and one at
+  a time; it waits while on battery, and Settings > Screen Recording shows how many
+  remain.
+- **Time words in search.** 오늘, 어제 저녁, 지난주, 3일 전, 10월 13일, today, last week
+  and similar words show that time instead of searching for the words. A time word
+  alone spreads up to 96 activities across that time, and other words search the text
+  inside it. Parts of the day count only beside a day word, since they are also
+  everyday words.
+- **Model and thinking level in search.** Menus next to the provider choose the model
+  and its thinking level, and Settings has the same choices. Claude, Codex and Grok
+  take the level as a setting (high unless changed); Gemini and Cursor models are
+  grouped into families with their levels. While the model list loads, Settings keeps
+  the saved model instead of opening the identifier field.
+- **Escape starts a new search.** Closing search with Escape clears it, so the next
+  search starts fresh; an answered search stays under recent searches, and one still
+  answering is kept. The minimize button still keeps the search.
+- **Apple Intelligence searches.** Search plans from the on-device model no longer fail
+  as invalid: a same-day range means that day, unusable fields are dropped, time words
+  in the question fill missing dates, and a wrong kind falls back to all memories.
+
 ## 0.8.0-alpha.1
 
 - More AI providers. **Gemini** runs through Google's Antigravity CLI (`agy`), which

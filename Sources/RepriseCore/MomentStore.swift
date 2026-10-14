@@ -115,7 +115,7 @@ public actor MomentStore {
                     bundle_id TEXT NOT NULL, window_title TEXT NOT NULL, text TEXT NOT NULL,
                     image_path TEXT NOT NULL, thumbnail_path TEXT NOT NULL, video_path TEXT,
                     video_offset REAL, bookmarked INTEGER NOT NULL, kind TEXT NOT NULL,
-                    byte_count INTEGER NOT NULL CHECK(byte_count >= 0), url TEXT
+                    byte_count INTEGER NOT NULL CHECK(byte_count >= 0), url TEXT, text_revision INTEGER
                 );
                 CREATE INDEX IF NOT EXISTS moments_time ON moments(timestamp DESC, id DESC);
                 CREATE INDEX IF NOT EXISTS moments_app_time ON moments(app_name, timestamp DESC);
@@ -158,6 +158,8 @@ public actor MomentStore {
             if !columns.contains("transcript_segments") { try Self.execute(connection, "ALTER TABLE moments ADD COLUMN transcript_segments TEXT") }
             if !columns.contains("transcription_note") { try Self.execute(connection, "ALTER TABLE moments ADD COLUMN transcription_note TEXT") }
             if !columns.contains("url") { try Self.execute(connection, "ALTER TABLE moments ADD COLUMN url TEXT") }
+            // Screens read before 0.8.1 lost Korean text; NULL marks them for reading again.
+            if !columns.contains("text_revision") { try Self.execute(connection, "ALTER TABLE moments ADD COLUMN text_revision INTEGER") }
             // Browser addresses joined the full-text index in 0.8; older indexes are rebuilt once.
             var index: OpaquePointer?
             guard sqlite3_prepare_v2(connection, "PRAGMA table_info(moments_fts)", -1, &index, nil) == SQLITE_OK else {
@@ -346,7 +348,7 @@ public actor MomentStore {
         moment.thumbnailPath = try normalizedMediaPath(moment.thumbnailPath)
         moment.videoPath = try moment.videoPath.map { try normalizedMediaPath($0) }
         let statement = try prepare("""
-            INSERT INTO moments (\(Self.columns)) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO moments (\(Self.columns),text_revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,\(Self.textRevision))
             ON CONFLICT(id) DO UPDATE SET timestamp=excluded.timestamp,app_name=excluded.app_name,
                 bundle_id=excluded.bundle_id,window_title=excluded.window_title,text=excluded.text,
                 image_path=excluded.image_path,thumbnail_path=excluded.thumbnail_path,
@@ -372,6 +374,42 @@ public actor MomentStore {
     }
 
     /// UPDATE only: finishing transcription must never resurrect a deleted recording.
+    /// The screen text recognition new captures get. Older screens are read again in the background.
+    public static let textRevision = 1
+
+    /// Screens whose text was recognized before the current revision, newest first.
+    public func screensNeedingText(limit: Int) throws -> [Moment] {
+        let statement = try prepare("SELECT \(Self.columns) FROM moments WHERE kind='screen' AND text_revision IS NULL ORDER BY timestamp DESC,id DESC LIMIT ?")
+        defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }
+        try bind([.integer(Int64(max(0, min(limit, 500))))], to: statement)
+        var rows: [Moment] = []
+        while try step(statement) { rows.append(readMoment(statement)) }
+        return rows
+    }
+
+    public func screensNeedingTextCount() throws -> Int {
+        let statement = try prepare("SELECT count(*) FROM moments WHERE kind='screen' AND text_revision IS NULL")
+        defer { sqlite3_reset(statement) }
+        guard try step(statement) else { return 0 }
+        return Int(sqlite3_column_int64(statement, 0))
+    }
+
+    /// Saves a screen's text read again, or only marks it read when `text` is nil (its image is
+    /// gone). The full-text index changes only when the text did.
+    public func saveRecognizedText(id: String, text: String?) throws {
+        if let text {
+            let update = try prepare("UPDATE moments SET text=? WHERE id=? AND kind='screen' AND text<>?")
+            defer { sqlite3_reset(update); sqlite3_clear_bindings(update) }
+            try bind([.text(text), .text(id), .text(text)], to: update)
+            try finish(update)
+        }
+        let mark = try prepare("UPDATE moments SET text_revision=\(Self.textRevision) WHERE id=?")
+        defer { sqlite3_reset(mark); sqlite3_clear_bindings(mark) }
+        try bind([.text(id)], to: mark)
+        try finish(mark)
+        forget(id)
+    }
+
     public func updateTranscript(id: String, text: String, segments: [TranscriptSegment], note: String?) throws {
         let encoded = String(decoding: try JSONEncoder().encode(segments.filter(\.isValid)), as: UTF8.self)
         let statement = try prepare("UPDATE moments SET text=?,transcript_segments=?,transcription_note=? WHERE id=? AND kind='meeting'")

@@ -47,9 +47,35 @@ public struct AIProviderConfiguration: Codable, Equatable, Sendable {
     public var model: String
     public var executablePath: String?
     public var timeoutSeconds: Double
-    public init(provider: AIProviderKind = .claude, model: String = "", executablePath: String? = nil, timeoutSeconds: Double = 90) {
+    /// The chosen thinking level for providers that take one as a flag; nil keeps Reprise's.
+    public var reasoningEffort: String?
+    public init(provider: AIProviderKind = .claude, model: String = "", executablePath: String? = nil, timeoutSeconds: Double = 90,
+                reasoningEffort: String? = nil) {
         self.provider = provider; self.model = model
         self.executablePath = executablePath; self.timeoutSeconds = timeoutSeconds
+        self.reasoningEffort = reasoningEffort
+    }
+
+    /// The level sent to the CLI: the chosen one when the model takes it, otherwise high, or the
+    /// model's own default when it has no high.
+    public var thinking: String? {
+        let levels = provider.thinkingLevels(model: model)
+        guard !levels.isEmpty else { return nil }
+        if let reasoningEffort, levels.contains(reasoningEffort) { return reasoningEffort }
+        return levels.contains("high") ? "high" : levels.last
+    }
+}
+
+public extension AIProviderKind {
+    /// Thinking levels a provider's CLI takes as a flag, lowest first. Gemini and Cursor name the
+    /// level in the model instead (see `AIModelFamily`); the rest have none.
+    func thinkingLevels(model: String) -> [String] {
+        switch self {
+        case .claude: ["low", "medium", "high", "xhigh", "max"]
+        case .grok: ["low", "medium", "high", "xhigh"]
+        case .codex: CodexAnswerCatalog.reasoningLevels(model: model)
+        default: []
+        }
     }
 }
 
@@ -114,9 +140,8 @@ public actor AIClient {
     /// automatic choice is the light-thinking Flash model from its current list.
     private func defaultGeminiModel(_ configuration: AIProviderConfiguration) async -> String {
         if let geminiDefault { return geminiDefault }
-        let models = await models(configuration: configuration).map(\.id)
-        let choice = models.first { $0.hasPrefix("gemini-") && $0.contains("flash") && $0.hasSuffix("-low") }
-            ?? models.first { $0.hasPrefix("gemini-") && $0.hasSuffix("-low") } ?? ""
+        let models = await models(configuration: configuration)
+        let choice = AIModelFamily.geminiDefault(models) ?? ""
         if !models.isEmpty { geminiDefault = choice }
         return choice
     }
@@ -260,7 +285,7 @@ enum AICommand {
         switch configuration.provider {
         case .claude:
             args = ["--print", "--output-format", "json", "--json-schema", schema,
-                    "--effort", "high", "--safe-mode", "--restricted", "--tools", "",
+                    "--effort", configuration.thinking ?? "high", "--safe-mode", "--restricted", "--tools", "",
                     "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}", "--no-session-persistence",
                     "--disable-slash-commands", "--no-chrome", "--permission-mode", "dontAsk",
                     "--settings", "{\"disableAllHooks\":true}", "--system-prompt", systemPrompt]
@@ -269,7 +294,7 @@ enum AICommand {
                     "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never"]
             for feature in codexDisabledFeatures { args += ["-c", "features.\(feature)=false"] }
             args += ["-c", "features.skip_host_skill_discovery=true", "-c", "model_provider=\"openai\"",
-                     "-c", "model_reasoning_effort=\"high\"", "-c", "approval_policy=\"never\"",
+                     "-c", "model_reasoning_effort=\"\(configuration.thinking ?? "high")\"", "-c", "approval_policy=\"never\"",
                      "-c", "web_search=\"disabled\"", "-c", "tools.update_plan.enabled=false",
                      "-c", "tools.experimental_request_user_input.enabled=false", "-c", "agents.enabled=false",
                      "-c", "skills.include_instructions=false", "-c", "skills.bundled.enabled=false",
@@ -278,7 +303,7 @@ enum AICommand {
             args = ["--output-format", "json", "--json-schema", schema, "--tools", "", "--deny", "*",
                     "--disallowed-tools", "search_tool,use_tool,list_mcp_resources,read_mcp_resource",
                     "--disable-web-search", "--no-subagents", "--verbatim", "--max-turns", "1",
-                    "--reasoning-effort", "high", "--sandbox", "off",
+                    "--reasoning-effort", configuration.thinking ?? "high", "--sandbox", "off",
                     "--permission-mode", "dontAsk", "--system-prompt-override", systemPrompt]
         case .gemini:
             // The prompt arrives on stdin as one stream-json message; `--print=` takes no argument text.

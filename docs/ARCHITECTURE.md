@@ -19,7 +19,10 @@ reads 1x displays at up to 3840 pixels. `BrowserURLReader` asks Safari and Chrom
 browsers for the front tab's address over Apple Events with a one-second limit;
 `BrowserAddress` keeps http and https addresses without fragments, credentials or
 secret-like query values, and the address is indexed with the title and text. Vision performs
-on-device OCR; image encoding/deduplication runs off the main actor. Full-size
+on-device OCR with automatic language detection, Korean, Japanese and Chinese hints first;
+image encoding/deduplication runs off the main actor. Screens read before 0.8.1 put
+English first and lost Korean text; they have no `text_revision` and are read again in
+the background, newest first, one at a time, waiting while on battery. Full-size
 images and thumbnails are separate. After 15 minutes, `FrameArchiver` moves full-size
 stills of one pixel size into HEVC movies (frame i at i seconds, keyframes every 30
 frames) and points each row at its movie and frame time in one transaction; a movie is

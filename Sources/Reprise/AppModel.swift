@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Combine
 import ImageIO
+import IOKit.ps
 import LocalAuthentication
 import RepriseCore
 import Speech
@@ -60,7 +61,16 @@ final class AppModel: ObservableObject {
     @Published var providerStatus: AIProviderStatus?
     @Published var accountStatus: AIAccountStatus?
     @Published var checkingProvider = false
-    @Published var availableModels: [AIModelOption] = []
+    @Published var availableModels: [AIModelOption] = [] {
+        didSet { modelFamilies = AIModelFamily.families(availableModels) }
+    }
+    @Published private(set) var modelFamilies: [AIModelFamily] = []
+    /// Thinking levels the provider takes as a flag for the chosen model.
+    @Published private(set) var thinkingLevels: [String] = []
+    /// Screens saved before 0.8.1 that are still waiting to have their text read again.
+    @Published private(set) var screensToReread = 0
+    /// Every memory in the time a quick search names, when only part of it is shown.
+    @Published private(set) var searchTimeTotal: Int?
     /// A model download in Ollama: name, completed fraction when known, and Ollama's status line.
     @Published private(set) var modelDownload: (name: String, fraction: Double?, status: String)?
     @Published private(set) var summaries: [String: MeetingSummary] = [:]
@@ -101,6 +111,7 @@ final class AppModel: ObservableObject {
     private var updatingSearchDraft = false
     private var archiveTask: Task<Void, Never>?
     private var archiveRequested = false
+    private var rereadTask: Task<Void, Never>?
 
     init(root: URL = ReprisePaths.root, keys: VaultKeys? = nil) throws {
         self.root = root
@@ -172,6 +183,7 @@ final class AppModel: ObservableObject {
             else if preferences.transcribeMeetings { await speechLanguages.sync(normalized) }
         }
         startArchiving()
+        startRereadingScreens()
         heartbeat = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(30)) } catch { break }
@@ -235,13 +247,35 @@ final class AppModel: ObservableObject {
         } catch { self.error = error.localizedDescription }
     }
 
+    /// Time words in the quick search, such as 오늘 or 어제 저녁, read as a time range.
+    var searchTime: QuickSearchTime? { searchTurns.isEmpty ? QuickSearchTime.parse(search, calendar: calendar) : nil }
+
+    /// The live search: the visible filters, narrowed to the time the words name.
+    var searchQuery: MomentQuery {
+        var request = query
+        guard let time = searchTime else { return request }
+        request.text = time.text
+        let end = time.interval.end.addingTimeInterval(-0.000001)
+        request.since = max(request.since ?? time.interval.start, time.interval.start)
+        request.until = min(request.until ?? end, end)
+        return request
+    }
+
     func refreshMatches() async {
         guard searchTurns.isEmpty else { return }
         let generation = UUID(); queryGeneration = generation
         do {
-            let items = try await store.search(query)
+            var request = searchQuery
+            var items: [Moment], total: Int?
+            // A time word alone shows that whole time: distinct activities across it, newest first.
+            if searchTime != nil, request.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                request.limit = 96
+                let overview = try await store.activityOverview(request)
+                items = overview.moments.sorted { ($0.timestamp, $0.id) > ($1.timestamp, $1.id) }
+                total = overview.coverage?.totalRecords
+            } else { items = try await store.search(request) }
             guard generation == queryGeneration else { return }
-            matchingMoments = items
+            matchingMoments = items; searchTimeTotal = total
         } catch { if generation == queryGeneration { searchError = error.localizedDescription } }
     }
 
@@ -494,7 +528,7 @@ final class AppModel: ObservableObject {
     func selectProvider(_ kind: AIProviderKind) {
         providerConfigurations[provider.provider.rawValue] = provider
         provider = providerConfigurations[kind.rawValue] ?? AIProviderConfiguration(provider: kind)
-        providerStatus = nil; accountStatus = nil; availableModels = []
+        providerStatus = nil; accountStatus = nil; availableModels = []; thinkingLevels = []
         cancelAnswer()
         Task { await saveSettings(); await refreshStatus() }
     }
@@ -506,8 +540,94 @@ final class AppModel: ObservableObject {
         let capabilities = await ai.status(configuration: config)
         let account = await ai.accountStatus(configuration: config)
         let options = await ai.models(configuration: config)
+        let levels = await Task.detached { config.provider.thinkingLevels(model: config.model) }.value
         guard config == provider, statusGeneration == token else { return }
         providerStatus = capabilities; accountStatus = account; availableModels = options; checkingProvider = false
+        thinkingLevels = levels
+    }
+
+    // MARK: Model and thinking level
+
+    struct Choice: Identifiable, Hashable { let id: String; let name: String }
+
+    /// Gemini and Cursor name the thinking level in the model, so they list model families.
+    private var levelsInModel: Bool { [.gemini, .cursor].contains(provider.provider) }
+
+    /// The model a search will use: the chosen one, or the automatic Gemini choice.
+    private var effectiveModel: String {
+        if provider.model.isEmpty, provider.provider == .gemini { return AIModelFamily.geminiDefault(availableModels) ?? "" }
+        return provider.model
+    }
+    private var effectiveFamily: AIModelFamily? {
+        let family = AIModelFamily.split(effectiveModel).family
+        return modelFamilies.first { $0.id == family }
+    }
+
+    var modelChoices: [Choice] {
+        levelsInModel ? modelFamilies.map { Choice(id: $0.id, name: $0.name) } : availableModels.map { Choice(id: $0.id, name: $0.name) }
+    }
+    /// "" while the provider's default is in use.
+    var modelChoice: String {
+        guard !provider.model.isEmpty else { return "" }
+        return levelsInModel ? AIModelFamily.split(provider.model).family : provider.model
+    }
+    /// A saved or custom model the provider's list does not show, or not yet while it loads.
+    var modelChoiceUnlisted: Bool { !modelChoice.isEmpty && !modelChoices.contains { $0.id == modelChoice } }
+    var defaultModelLabel: String {
+        switch provider.provider {
+        case .opencode: "Space Bunny (free, not kept)"
+        case .ollama: "First downloaded model"
+        case .gemini: "Gemini Flash, light thinking (fast)"
+        default: "Current provider default"
+        }
+    }
+    var modelLabel: String {
+        guard provider.model.isEmpty else { return modelChoices.first { $0.id == modelChoice }?.name ?? provider.model }
+        switch provider.provider {
+        case .gemini: return effectiveFamily?.name ?? "Gemini Flash"
+        case .opencode: return "Space Bunny"
+        case .ollama: return availableModels.first?.name ?? "No model"
+        default: return "Default model"
+        }
+    }
+
+    func chooseModel(_ id: String) {
+        guard id != modelChoice else { return }
+        if id.isEmpty { provider.model = "" }
+        else if levelsInModel, let family = modelFamilies.first(where: { $0.id == id }) {
+            provider.model = family.model(keeping: AIModelFamily.split(effectiveModel).level)
+        } else { provider.model = id }
+        providerChoiceChanged()
+    }
+
+    var thinkingChoices: [Choice] {
+        if levelsInModel {
+            guard let family = effectiveFamily, family.levels.count > 1 else { return [] }
+            return family.levels.map { Choice(id: $0.level, name: AIModelFamily.label($0.level)) }
+        }
+        return thinkingLevels.map { Choice(id: $0, name: AIModelFamily.label($0)) }
+    }
+    var thinkingChoice: String {
+        if levelsInModel { return AIModelFamily.split(effectiveModel).level }
+        if let chosen = provider.reasoningEffort, thinkingLevels.contains(chosen) { return chosen }
+        return thinkingLevels.contains("high") ? "high" : thinkingLevels.last ?? ""
+    }
+
+    func chooseThinking(_ level: String) {
+        if levelsInModel {
+            guard let model = effectiveFamily?.model(for: level) else { return }
+            provider.model = model
+        } else { provider.reasoningEffort = level }
+        providerChoiceChanged()
+    }
+
+    private func providerChoiceChanged() {
+        let config = provider
+        Task {
+            await saveSettings()
+            let levels = await Task.detached { config.provider.thinkingLevels(model: config.model) }.value
+            if config == provider { thinkingLevels = levels }
+        }
     }
 
     func signIn() {
@@ -709,9 +829,12 @@ final class AppModel: ObservableObject {
 
     func startNewSearch() { invalidateAnswer(); setSearchDraft(""); Task { await refreshMatches() } }
 
+    /// Escape closes the search, and the next one starts fresh; a finished search stays under
+    /// recent searches. A search that is still answering is kept so its answer is not lost.
     @discardableResult func dismissSearch() -> Bool {
         guard searchPresented else { return false }
         searchPresented = false
+        if !asking { startNewSearch() }
         return true
     }
 
@@ -827,6 +950,69 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Screens saved before 0.8.1 lost Korean text: recognition used English first. They are read
+    /// again newest first, one at a time with a pause between them, waiting while on battery.
+    private func startRereadingScreens() {
+        rereadTask?.cancel()
+        let store = self.store, root = self.root, cipher = self.cipher, languages = settings.ocrLanguages
+        let menuBar = NSScreen.main.map { ($0.frame.maxY - $0.visibleFrame.maxY) / max(1, $0.frame.height) } ?? 0
+        Task { screensToReread = (try? await store.screensNeedingTextCount()) ?? 0 }
+        rereadTask = Task.detached(priority: .background) { [weak self] in
+            do { try await Task.sleep(for: .seconds(60)) } catch { return }
+            let reader = CaptureImageProcessor()
+            var movie: (path: String, frames: FrameReader)?
+            func text(of moment: Moment) async -> String? {
+                var image: CGImage?
+                if !moment.imagePath.isEmpty {
+                    image = AppModel.still(root.appendingPathComponent(moment.imagePath), cipher: cipher)
+                } else if let frame = moment.archivedFrame {
+                    if movie?.path != frame.path { movie = (frame.path, FrameReader(movie: root.appendingPathComponent(frame.path), cipher: cipher)) }
+                    image = try? await movie?.frames.image(at: frame.offset)
+                }
+                guard let image else { return nil }
+                // Imported pictures never had a menu bar to skip.
+                let band = moment.appName == "Imported" && moment.bundleID.isEmpty ? 0 : Int((Double(image.height) * menuBar).rounded())
+                return try? await reader.recognizeText(in: image, languages: languages, ignoringTopRows: band)
+            }
+            while !Task.isCancelled {
+                if AppModel.onBattery() {
+                    do { try await Task.sleep(for: .seconds(300)) } catch { return }
+                    continue
+                }
+                guard let batch = try? await store.screensNeedingText(limit: 20), !batch.isEmpty else { break }
+                for listed in batch {
+                    guard !Task.isCancelled else { return }
+                    var recognized = await text(of: listed)
+                    // Archiving may have moved the still into a movie since the batch was read.
+                    if recognized == nil, let current = try? await store.moment(id: listed.id), current != listed {
+                        recognized = await text(of: current)
+                    }
+                    // A screen that cannot be saved would come back in every batch, so stop until next launch.
+                    do { try await store.saveRecognizedText(id: listed.id, text: recognized) } catch { return }
+                    do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+                }
+                let remaining = (try? await store.screensNeedingTextCount()) ?? 0
+                await self?.setScreensToReread(remaining)
+            }
+            await self?.setScreensToReread(0)
+        }
+    }
+
+    private func setScreensToReread(_ count: Int) { screensToReread = count }
+
+    nonisolated static func still(_ url: URL, cipher: VaultCipher) -> CGImage? {
+        guard let data = try? cipher.contents(of: url, maxBytes: 64 * 1024 * 1024),
+              let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
+
+    nonisolated static func onBattery() -> Bool {
+        if ProcessInfo.processInfo.isLowPowerModeEnabled { return true }
+        guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let source = IOPSGetProvidingPowerSourceType(info)?.takeUnretainedValue() else { return false }
+        return source as String == kIOPSBatteryPowerValue
+    }
+
     /// Seals one batch of media written before encryption. Returns whether more remain.
     private func sealLegacyMedia() async -> Bool {
         guard let referenced = try? await store.referencedMedia() else { return false }
@@ -906,7 +1092,8 @@ actor ImageImporter {
         CGImageDestinationAddImage(encoder, image, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
         guard CGImageDestinationFinalize(encoder) else { throw CocoaError(.fileWriteUnknown) }
         try cipher.write(encoded as Data, to: destination)
-        let request = VNRecognizeTextRequest(); request.recognitionLevel = .accurate; request.recognitionLanguages = ["en-US", "ko-KR"]
+        let request = VNRecognizeTextRequest(); request.recognitionLevel = .accurate; request.automaticallyDetectsLanguage = true
+        request.recognitionLanguages = ScreenTextLanguages.hints(["en-US", "ko-KR"])
         try VNImageRequestHandler(cgImage: image).perform([request])
         let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
         let attributes = try url.resourceValues(forKeys: [.contentModificationDateKey])

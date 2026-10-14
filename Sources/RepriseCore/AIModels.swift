@@ -5,6 +5,86 @@ public struct AIModelOption: Identifiable, Equatable, Sendable {
     public let name: String
 }
 
+/// Models that differ only in thinking level or speed, as Gemini and Cursor list them
+/// (`claude-opus-5-5-high-fast`), grouped so the level can be chosen on its own.
+public struct AIModelFamily: Identifiable, Equatable, Sendable {
+    public struct Level: Equatable, Sendable {
+        /// Empty when the model names no level.
+        public let level: String
+        public let model: String
+    }
+    public let id: String
+    public let name: String
+    public let levels: [Level]
+
+    public static let levelOrder = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+
+    /// The family a model identifier belongs to and the level it names.
+    public static func split(_ id: String) -> (family: String, level: String) {
+        var core = id, fast = ""
+        if core.hasSuffix("-fast") { core.removeLast(5); fast = "-fast" }
+        for level in levelOrder where core.hasSuffix("-" + level) && core.count > level.count + 1 {
+            return (String(core.dropLast(level.count + 1)) + fast, level)
+        }
+        return (id, "")
+    }
+
+    public static func families(_ options: [AIModelOption]) -> [AIModelFamily] {
+        var order: [String] = [], members: [String: [(option: AIModelOption, level: String)]] = [:]
+        for option in options {
+            let (family, level) = split(option.id)
+            if members[family] == nil { order.append(family) }
+            members[family, default: []].append((option, level))
+        }
+        return order.map { family in
+            let items = members[family] ?? []
+            let levels = items.map { Level(level: $0.level, model: $0.option.id) }
+                .sorted { (levelOrder.firstIndex(of: $0.level) ?? -1) < (levelOrder.firstIndex(of: $1.level) ?? -1) }
+            let named = items.first { $0.level.isEmpty || $0.level == "medium" } ?? items[0]
+            return AIModelFamily(id: family, name: displayName(named.option.name, level: named.level), levels: levels)
+        }
+    }
+
+    /// "Gemini 3.8 Flash (High)" or "Claude Opus 5.5 1M Extra High Fast" without the level words.
+    static func displayName(_ name: String, level: String) -> String {
+        guard !level.isEmpty else { return name }
+        var result = name
+        for word in level == "xhigh" ? ["Extra High", "XHigh"] : [label(level)] {
+            for pattern in [" (\(word))", " \(word)"] {
+                if let range = result.range(of: pattern, options: .backwards) {
+                    result.removeSubrange(range)
+                    return result.split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
+                }
+            }
+        }
+        return result
+    }
+
+    public func model(for level: String) -> String? { levels.first { $0.level == level }?.model }
+
+    /// The level to use when switching to this family: the same one if it has it, else its
+    /// unnamed or medium model, else its first.
+    public func model(keeping level: String) -> String {
+        model(for: level) ?? model(for: "") ?? model(for: "medium") ?? levels[0].model
+    }
+
+    public static func label(_ level: String) -> String {
+        switch level {
+        case "": "Default"
+        case "xhigh": "Extra High"
+        default: level.prefix(1).uppercased() + level.dropFirst()
+        }
+    }
+
+    /// Antigravity's own default model thinks for a minute or more on small requests, so the
+    /// automatic Gemini choice is the light-thinking Flash model from its current list.
+    public static func geminiDefault(_ options: [AIModelOption]) -> String? {
+        let ids = options.map(\.id)
+        return ids.first { $0.hasPrefix("gemini-") && $0.contains("flash") && $0.hasSuffix("-low") }
+            ?? ids.first { $0.hasPrefix("gemini-") && $0.hasSuffix("-low") }
+    }
+}
+
 public extension AIClient {
     /// Catalog metadata only. This never sends a prompt or reads credential contents.
     func models(configuration: AIProviderConfiguration) async -> [AIModelOption] {
