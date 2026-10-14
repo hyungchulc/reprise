@@ -281,10 +281,13 @@ Evidence is JSON-encoded quoted data, with instructions inside evidence explicit
 treated as untrusted.
 
 The model must return a JSON object with `answer` and `citations`. The parser
-requires a successful terminal provider event, rejects malformed/truncated JSON,
-tool events, provider error results and unknown citation labels, and checks
-inline `[M1]` references against the supplied labels. Citations are navigation
-references, not a guarantee that every model claim is accurate.
+requires a successful terminal provider event and rejects malformed/truncated JSON,
+tool events and provider error results. Citation labels are read leniently:
+`[m03]`, `[M3, M4]` and labels cited in the answer but missing from the list all
+count. A label that was not supplied is removed from the answer, and an answer whose
+citations were all invented is rejected, so every citation shown opens supplied
+evidence. Citations are navigation references, not a guarantee that every model
+claim is accurate.
 
 `UsageEntry` records only nonnegative numeric input/output tokens and cost
 emitted by the terminal provider result. Missing, fractional, Boolean, negative,

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1-alpha.2
+
+- **Answers no longer fail over citation slips.** An answer that wrote a label in
+  another form, or cited a memory in its text without listing it, failed with "The
+  response cites evidence that was not supplied." Labels are now read leniently,
+  references to evidence that was not supplied are removed from the answer, and only
+  an answer whose citations were all invented is rejected.
+
 ## 0.8.1-alpha.1
 
 - **Korean screen text.** Text recognition put English first, which dropped or garbled

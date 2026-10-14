@@ -622,19 +622,40 @@ enum AIResponseParser {
 
     static func response(_ result: AIJSONResult, citations: [AICitation]) throws -> AIResponse {
         let payload = result.payload
-        guard Set(payload.keys) == Set(["answer", "citations"]), let text = payload["answer"] as? String,
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let labels = payload["citations"] as? [String] else { throw AIProviderError.invalidResponse }
+        guard Set(payload.keys) == Set(["answer", "citations"]), let answer = payload["answer"] as? String,
+              !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let listed = payload["citations"] as? [String] else { throw AIProviderError.invalidResponse }
         let supplied = Dictionary(uniqueKeysWithValues: citations.map { ($0.label, $0) })
-        guard labels.allSatisfy({ supplied[$0] != nil }) else { throw AIProviderError.invalidCitation }
-        let pattern = try NSRegularExpression(pattern: #"\[M[0-9]+\]"#)
-        let inlineLabels = pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {
-            Range($0.range, in: text).map { String(text[$0].dropFirst().dropLast()) }
+        // Models vary how they write a label ("[M3]", "m03", "[M3, M4]") and sometimes cite in the
+        // answer without listing the label, so labels are read leniently. Every citation left in the
+        // answer points to supplied evidence: a reference to anything else is removed, and an answer
+        // whose citations were all invented is rejected.
+        let listedLabels = listed.flatMap(labels)
+        var inlineLabels: [String] = []
+        var citesInline = false
+        let group = try NSRegularExpression(pattern: #"[ \t]?\[\s*[Mm]\s*[0-9]{1,4}(?:\s*[,;]?\s*[Mm]\s*[0-9]{1,4})*\s*\]"#)
+        let text = NSMutableString(string: answer)
+        for match in group.matches(in: answer, range: NSRange(answer.startIndex..., in: answer)).reversed() {
+            guard let range = Range(match.range, in: answer) else { continue }
+            let original = answer[range]
+            let kept = labels(String(original)).filter { supplied[$0] != nil }
+            citesInline = true
+            inlineLabels.insert(contentsOf: kept, at: 0)
+            let space = original.first.map { $0.isWhitespace ? String($0) : "" } ?? ""
+            text.replaceCharacters(in: match.range, with: kept.isEmpty ? "" : space + kept.map { "[\($0)]" }.joined())
         }
-        guard inlineLabels.allSatisfy({ labels.contains($0) && supplied[$0] != nil }) else { throw AIProviderError.invalidCitation }
         var seen = Set<String>()
-        let used = labels.filter { seen.insert($0).inserted }.compactMap { supplied[$0] }
-        return AIResponse(text: text, citations: used, usage: result.usage)
+        let used = (listedLabels + inlineLabels).filter { supplied[$0] != nil && seen.insert($0).inserted }.compactMap { supplied[$0] }
+        if used.isEmpty, citesInline || !listedLabels.isEmpty { throw AIProviderError.invalidCitation }
+        return AIResponse(text: text as String, citations: used, usage: result.usage)
+    }
+
+    /// Evidence labels in a model's spelling ("M3", "[m03]", "M3, M4"), as the labels Reprise supplied.
+    static func labels(_ value: String) -> [String] {
+        guard let pattern = try? NSRegularExpression(pattern: #"[Mm]\s*([0-9]{1,4})"#) else { return [] }
+        return pattern.matches(in: value, range: NSRange(value.startIndex..., in: value)).compactMap {
+            Range($0.range(at: 1), in: value).flatMap { Int(value[$0]) }.map { "M\($0)" }
+        }
     }
 
     private static func containsTool(_ object: Any) -> Bool {

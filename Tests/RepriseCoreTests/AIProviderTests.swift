@@ -98,6 +98,16 @@ final class AIProviderTests: XCTestCase {
         XCTAssertThrowsError(try parse(hidden)) { XCTAssertEqual($0 as? AIProviderError, .invalidCitation) }
     }
 
+    func testCitationSpellingsAreReadAndInventedLabelsRemoved() throws {
+        let unlisted = try parse(#"{"type":"result","subtype":"success","structured_output":{"answer":"Worked on it [m01, M99].\nDone [M7]","citations":[]}}"#)
+        XCTAssertEqual(unlisted.text, "Worked on it [M1].\nDone")
+        XCTAssertEqual(unlisted.citations, references)
+        let bracketed = try parse(#"{"type":"result","subtype":"success","structured_output":{"answer":"Recorded text","citations":["[M1]"]}}"#)
+        XCTAssertEqual(bracketed.citations, references)
+        let uncited = try parse(#"{"type":"result","subtype":"success","structured_output":{"answer":"Not enough evidence.","citations":[]}}"#)
+        XCTAssertTrue(uncited.citations.isEmpty)
+    }
+
     func testEvidenceIsBoundedAndDoesNotIncludeMetadataOrPaths() throws {
         let moments = (0..<100).map {
             Moment(id: "fixture-\($0)", appName: "DO-NOT-SEND-APP", windowTitle: "DO-NOT-SEND-TITLE",

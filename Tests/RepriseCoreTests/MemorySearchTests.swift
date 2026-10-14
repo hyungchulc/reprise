@@ -94,7 +94,19 @@ final class MemorySearchTests: XCTestCase {
         if let question = ProcessInfo.processInfo.environment["REPRISE_VERIFY_QUESTION"] {
             try await store.insert(Moment(id: "synthetic-today", timestamp: Date().addingTimeInterval(-600), appName: "Notes", windowTitle: "메모",
                                           text: "오늘 회의에서 예산 초안을 검토했고 금요일까지 수정하기로 했다. This is a synthetic test record."))
-            let result = try await MemorySearch(store: store, client: AIClient()).search(question: question, configuration: AIProviderConfiguration(provider: kind))
+            // REPRISE_VERIFY_SPREAD fills today with that many synthetic activities, like a full day.
+            let environment = ProcessInfo.processInfo.environment
+            let spread = Int(environment["REPRISE_VERIFY_SPREAD"] ?? "") ?? 0
+            let start = Calendar.current.startOfDay(for: Date()), span = Date().timeIntervalSince(start)
+            let apps = ["Safari", "Notes", "Mail", "Xcode", "Slack", "Calendar"]
+            for index in 0..<spread {
+                try await store.insert(Moment(id: "synthetic-\(index)", timestamp: start.addingTimeInterval(span * Double(index + 1) / Double(spread + 2)),
+                    appName: apps[index % apps.count], windowTitle: "Synthetic task \(index)",
+                    text: "Synthetic test record \(index): worked on item \(index) of the sample plan. 합성 테스트 기록 \(index)번: 샘플 계획의 \(index)번 항목을 작업했다."))
+            }
+            let configuration = AIProviderConfiguration(provider: kind, model: environment["REPRISE_VERIFY_MODEL"] ?? "",
+                                                        reasoningEffort: environment["REPRISE_VERIFY_EFFORT"])
+            let result = try await MemorySearch(store: store, client: AIClient()).search(question: question, configuration: configuration)
             print("ANSWER", result.response.text)
             return
         }
