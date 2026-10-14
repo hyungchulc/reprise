@@ -48,6 +48,16 @@ enum TranscriptionEngine: String, Codable, CaseIterable, Identifiable {
     var languagesAreHints: Bool { self != .apple }
 }
 
+/// Who finds the voices when speakers are labeled. Gemini names voices itself in recordings of one piece.
+enum SpeakerFinder: String, Codable, CaseIterable, Identifiable {
+    /// SpeakerKit's speaker model on this Mac.
+    case mac
+    /// OpenAI's diarization model, through the OpenAI account chosen for transcription.
+    case openAI
+    var id: String { rawValue }
+    var title: String { self == .mac ? "On this Mac" : "OpenAI, online" }
+}
+
 /// OpenAI's transcription models that work with a ChatGPT sign-in.
 struct OpenAITranscriptionModel: Identifiable, Equatable {
     let id: String
@@ -94,6 +104,7 @@ struct TranscriptionRequest: Sendable {
     var geminiAccess = GeminiAccess.subscription
     var geminiModel = ""
     var speakerLabels = false
+    var speakerFinder = SpeakerFinder.mac
     /// The Codex set in AI & Models; its ChatGPT sign-in reaches OpenAI.
     var codexPath: String?
     /// The Antigravity set in AI & Models; its Google sign-in reaches Gemini.

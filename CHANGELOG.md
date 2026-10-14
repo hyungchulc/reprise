@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.0-alpha.7
+
+- **Find speakers with OpenAI.** Settings > Audio & Meetings > Speakers > Find speakers
+  chooses OpenAI's diarization model instead of the speaker model on this Mac, through your
+  ChatGPT plan or OpenAI API key. The words still come from the chosen engine; OpenAI only
+  says who spoke when. Long recordings go in 20-minute pieces with a short clip of each
+  voice, so a voice keeps its name through the whole meeting. When OpenAI cannot help, the
+  speaker model on this Mac takes over if it is downloaded.
+
 ## 0.9.0-alpha.6
 
 - **Transcribe with Gemini.** Choose Gemini in Settings > Audio & Meetings, or in Audio >

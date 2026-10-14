@@ -175,7 +175,8 @@ models run online through the ChatGPT plan the Codex CLI is signed in with, or a
 API key; without either, Reprise transcribes with Apple on this Mac instead. Gemini listens
 to the recording through the Google AI plan the Antigravity CLI is signed in with, or a
 Gemini API key, and tells the voices apart in recordings up to 20 minutes. Other speaker
-labels are found on this Mac. Speakers can be renamed in the transcript.
+labels are found on this Mac by a speaker model, or by OpenAI's diarization model with a
+ChatGPT plan or OpenAI API key. Speakers can be renamed in the transcript.
 When a transcript is ready, the chosen AI provider summarizes it into an overview,
 key points, decisions and action items, and a notification opens the recording. The
 summary is stored encrypted with the recording; the notification shows only the

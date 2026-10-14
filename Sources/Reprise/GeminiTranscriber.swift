@@ -42,7 +42,7 @@ struct GeminiTranscriber {
                 if running == parallel, let finished = try await group.next() { segments += finished.segments; served = finished.model; running -= 1 }
                 index += 1
                 let file = folder.appendingPathComponent("recording-\(index).\(access == .subscription ? "m4a" : "aac")")
-                try Self.write(samples, sampleRate: audio.sampleRate, to: file)
+                try RecordingPCM.writeAAC(samples, sampleRate: audio.sampleRate, to: file)
                 let seconds = Double(samples.count) / audio.sampleRate
                 group.addTask { [self] in
                     defer { try? FileManager.default.removeItem(at: file) }
@@ -83,24 +83,6 @@ struct GeminiTranscriber {
         switch error {
         case .invalidResponse, .providerFailed, .processFailed: true
         default: false
-        }
-    }
-
-    /// Mono AAC at 32 kbps: an `.m4a` file, or raw AAC for an `.aac` name. Gemini hears audio at
-    /// 16 kbps, so this loses nothing it would use.
-    static func write(_ samples: [Float], sampleRate: Double, to url: URL) throws {
-        let settings: [String: Any] = [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: sampleRate, AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 32_000]
-        let file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
-        let step = Int(sampleRate) * 10
-        var position = 0
-        while position < samples.count {
-            let count = min(step, samples.count - position)
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(count)),
-                  let channel = buffer.floatChannelData?[0] else { throw CaptureFailure("The recording could not be prepared for Gemini.") }
-            buffer.frameLength = AVAudioFrameCount(count)
-            samples.withUnsafeBufferPointer { channel.update(from: $0.baseAddress! + position, count: count) }
-            try file.write(from: buffer)
-            position += count
         }
     }
 }

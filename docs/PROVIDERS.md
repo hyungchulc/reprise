@@ -290,7 +290,22 @@ key is read from the login keychain item `local.aria.reprise.api-key` / `openai`
 Any failure, including a missing account, transcribes with Apple on this Mac instead, and
 the transcript note says why.
 
-**Speaker labels** other than Gemini's use SpeakerKit's pyannote pipeline from `argmaxinc/speakerkit-coreml`
+**Speaker labels** other than Gemini's come from the finder chosen in Audio settings.
+
+With **OpenAI**, the recording is decoded at 16 kHz and cut into 20-minute pieces of mono
+32 kbps AAC, each sent to `POST /v1/audio/transcriptions` with `model =
+gpt-4o-transcribe-diarize`, `response_format = diarized_json`, `chunking_strategy = auto`
+(required past 30 seconds) and the language hint when exactly one is chosen, under the same
+bearer as OpenAI transcription. The first piece goes alone; its voices are named Speaker 1,
+2, … in speaking order, and each voice's longest stretch of speech (turns joined across
+pauses under a second, two to ten seconds of it) is passed with the other pieces as
+`known_speaker_names[]` and `known_speaker_references[]` WAV data URLs, up to four voices.
+Those pieces run three at a time; a voice OpenAI does not match gets a new number. Only the
+turns are used: each transcript segment takes the voice heard most during it, as below. A
+dropped connection retries its piece once. When OpenAI fails, the speaker model on this Mac
+labels the recording if it is downloaded, and the transcript note says why.
+
+On this Mac, speaker labels use SpeakerKit's pyannote pipeline from `argmaxinc/speakerkit-coreml`
 (CC BY 4.0), downloaded into `Models/speakers`. The whole recording, up to two hours, is
 diarized at 16 kHz. While speakers are labeled, Apple's phrases stay separate; each segment
 takes the voice heard most during it (or one within a second), voices are numbered in

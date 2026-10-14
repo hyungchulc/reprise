@@ -95,6 +95,7 @@ and deletion cannot remove copies held by backups or external services.
 | Meeting summary | The transcript and meeting title to the chosen provider, in parts that fit its limit |
 | OpenAI transcription, when chosen | The recording's audio, in ten-minute pieces, to OpenAI's Realtime API, with a short-lived session secret made from the ChatGPT sign-in of the Codex CLI or from an OpenAI API key |
 | Gemini transcription, when chosen | The recording's audio, in 20-minute pieces of 32 kbps AAC, to Google: read by the Antigravity CLI with its Google sign-in, or sent inline to the Gemini API with a Gemini API key. Each piece is a private temporary file, deleted when the piece is done |
+| OpenAI speaker finding, when chosen | The recording's audio, in 20-minute pieces of 32 kbps AAC, to OpenAI's transcription endpoint with the diarization model, with a clip of up to ten seconds of each voice from the first piece; through the Codex CLI's ChatGPT sign-in or an OpenAI API key. Only who spoke when is kept |
 | Whisper and speaker models, when chosen | Download requests to Hugging Face; recordings stay on the Mac |
 | Live captions by OpenAI, when chosen | What the Mac plays, or the microphone, while captions are on, streamed to OpenAI's Realtime API with a short-lived session secret made the same way |
 | Live captions on this Mac | Nothing leaves the Mac; speech and translation models download once from Apple |
@@ -123,7 +124,8 @@ Key (OpenAI)”, “Reprise API Key (Anthropic)” or “Reprise API Key (Google
 only to its vendor, in a request header, never in an address. OpenAI requests ask OpenAI not to
 store the response for later retrieval. Google may use what is sent with a Gemini key on its
 free tier to improve its products. Audio leaves the Mac only with OpenAI or Gemini
-transcription, OpenAI live captions and the meeting assistant listening with OpenAI. The environment variables and
+transcription, OpenAI speaker finding, OpenAI live captions and the meeting assistant
+listening with OpenAI. The environment variables and
 token of an MCP server stay in the login keychain as “Reprise MCP Server (name)” and go only to
 that server.
 

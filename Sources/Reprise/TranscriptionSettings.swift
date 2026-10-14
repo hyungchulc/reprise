@@ -252,16 +252,33 @@ struct ModelDownloadRow: View {
 struct SpeakerLabelSettings: View {
     @ObservedObject var model: AppModel
     @ObservedObject var models: LocalSpeechModels
+    @StateObject private var access = OpenAIAccessCheck()
+    private var finder: SpeakerFinder { model.preferences.speakerFinder }
+    private var engine: TranscriptionEngine { model.preferences.transcriptionEngine }
+
     var body: some View {
         Toggle("Label speakers", isOn: $model.preferences.speakerLabels)
         if model.preferences.speakerLabels {
-            ModelDownloadRow(title: "Speaker model", state: models.speakers, size: models.sizes["speakers"],
-                             download: models.downloadSpeakers, cancel: { models.cancel("speakers") }, delete: models.deleteSpeakers)
+            Picker("Find speakers", selection: $model.preferences.speakerFinder) {
+                ForEach(SpeakerFinder.allCases) { Text($0.title).tag($0) }
+            }
+            if finder == .mac {
+                ModelDownloadRow(title: "Speaker model", state: models.speakers, size: models.sizes["speakers"],
+                                 download: models.downloadSpeakers, cancel: { models.cancel("speakers") }, delete: models.deleteSpeakers)
+            } else if engine != .openAI {
+                // The OpenAI engine shows its account above; other engines need it here.
+                OpenAIAccessRow(model: model, access: access, purpose: "Finding speakers")
+            }
         }
-        Text(model.preferences.transcriptionEngine == .gemini
-             ? "Gemini tells the voices apart itself in recordings up to 20 minutes and labels each part, such as Speaker 1. Longer recordings are labeled on this Mac with the speaker model, about 30 MB, which downloads once. Click a speaker's name in a transcript to rename them."
-             : "Finds who is speaking, on this Mac, with every engine, and labels each part, such as Speaker 1. Click a speaker's name in a transcript to rename them. The speaker model is about 30 MB and downloads once; recordings up to two hours are labeled.")
-            .repriseFont(.caption).foregroundStyle(.secondary)
+        Text(note).repriseFont(.caption).foregroundStyle(.secondary)
+    }
+
+    private var note: String {
+        let gemini = engine == .gemini ? "Gemini tells the voices apart itself in recordings up to 20 minutes. Longer recordings use the finder chosen here. " : ""
+        let found = finder == .openAI
+            ? "OpenAI's diarization model finds who spoke when, through the OpenAI account chosen for transcription, and Reprise puts the names on the transcript; the words still come from the engine above. The recording is sent to OpenAI for this, in 20-minute pieces, with a short clip of each voice so voices keep their names across pieces."
+            : "The speaker model finds who is speaking on this Mac, with every engine. It is about 30 MB and downloads once; recordings up to two hours are labeled."
+        return gemini + found + " Each part is labeled, such as Speaker 1; click a speaker's name in a transcript to rename them."
     }
 }
 

@@ -696,7 +696,7 @@ final class AppModel: ObservableObject {
                              openAIModel: preferences.openAITranscriptionModel, openAIAccess: preferences.openAIAccess,
                              whisperModel: preferences.whisperModel, geminiAccess: preferences.geminiAccess,
                              geminiModel: preferences.geminiTranscriptionModel, speakerLabels: preferences.speakerLabels,
-                             codexPath: codexPath, geminiPath: geminiPath)
+                             speakerFinder: preferences.speakerFinder, codexPath: codexPath, geminiPath: geminiPath)
     }
 
     /// The Codex chosen in AI & Models, also when another provider answers searches.

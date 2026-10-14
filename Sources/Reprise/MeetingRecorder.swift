@@ -299,7 +299,7 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
             case .gemini: labeled = await transcribeWithGemini(url, request: request)
             }
             if request.speakerLabels, !transcriptSegments.isEmpty {
-                if !transcriptionCancelled, !labeled { await labelSpeakers(url) }
+                if !transcriptionCancelled, !labeled { await labelSpeakers(url, request: request) }
                 transcriptSegments = TranscriptMerge.rows(transcriptSegments)
             }
             if !transcriptSegments.isEmpty { transcript = SpeakerLabels.text(transcriptSegments) }
@@ -382,17 +382,7 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
                                                 speakers: request.speakerLabels, language: request.languageHint)
             let parts = PartsDone()
             // Gemini answers each piece at once, so the time spent shows it is still working.
-            let ticker = Task { [weak self] in
-                while !Task.isCancelled {
-                    let (done, total) = parts.value
-                    let elapsed = Duration.seconds(Int(Date().timeIntervalSince(started))).formatted(.time(pattern: .minuteSecond))
-                    await MainActor.run {
-                        guard let self, self.transcribingPath != nil else { return }
-                        self.status = total > 1 ? "Transcribing with Gemini, \(done) of \(total) parts, \(elapsed)" : "Transcribing with Gemini, \(elapsed)"
-                    }
-                    try? await Task.sleep(for: .seconds(1))
-                }
-            }
+            let ticker = tickStatus("Transcribing with Gemini", parts: parts, since: started)
             defer { ticker.cancel() }
             let work = Task.detached(priority: .userInitiated) { try await transcriber.transcribe(audio, progress: { parts.set($0, $1) }) }
             analysisCancel = { work.cancel(); audio.cancel() }
@@ -401,8 +391,8 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
             transcriptSegments = result.segments
             transcript = SpeakerLabels.text(transcriptSegments)
             if transcriptSegments.isEmpty { appendTranscriptionWarning("Gemini heard no speech in this recording.") }
-            if request.speakerLabels, !result.labeledSpeakers, !transcriptSegments.isEmpty, speechModels.speakers != .ready {
-                appendTranscriptionWarning("Gemini labels speakers in recordings up to 20 minutes. For longer ones, download the speaker model in Audio settings.")
+            if request.speakerLabels, !result.labeledSpeakers, !transcriptSegments.isEmpty, request.speakerFinder == .mac, speechModels.speakers != .ready {
+                appendTranscriptionWarning("Gemini labels speakers in recordings up to 20 minutes. For longer ones, download the speaker model in Audio settings, or find speakers with OpenAI.")
                 return true
             }
             return result.labeledSpeakers
@@ -472,6 +462,50 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
             }
             appendTranscriptionWarning("\(name): \(error.localizedDescription) Transcribed with Apple on this Mac instead.")
             await transcribeOnDevice(url, locales: request.locales)
+        }
+    }
+
+    /// Shows the work and the time spent every second, with the parts done once there are several.
+    private func tickStatus(_ work: String, parts: PartsDone, since started: Date) -> Task<Void, Never> {
+        Task { [weak self] in
+            while !Task.isCancelled {
+                let (done, total) = parts.value
+                let elapsed = Duration.seconds(Int(Date().timeIntervalSince(started))).formatted(.time(pattern: .minuteSecond))
+                await MainActor.run {
+                    guard let self, self.transcribingPath != nil else { return }
+                    self.status = total > 1 ? "\(work), \(done) of \(total) parts, \(elapsed)" : "\(work), \(elapsed)"
+                }
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    /// Finds who spoke when with the chosen finder and names each voice in the transcript.
+    private func labelSpeakers(_ url: URL, request: TranscriptionRequest) async {
+        guard request.speakerFinder == .openAI else { await labelSpeakers(url); return }
+        let started = Date()
+        do {
+            let credential = try await OpenAICredential.resolve(request.openAIAccess, codexPath: request.codexPath)
+            let audio = try await RecordingPCM(url: url, cipher: store.cipher, sampleRate: OpenAISpeakerFinder.sampleRate)
+            let finder = OpenAISpeakerFinder(credential: credential, language: request.languageHint)
+            let parts = PartsDone()
+            let ticker = tickStatus("Finding speakers with OpenAI", parts: parts, since: started)
+            defer { ticker.cancel() }
+            let work = Task.detached(priority: .userInitiated) { try await finder.turns(audio, progress: { parts.set($0, $1) }) }
+            analysisCancel = { work.cancel(); audio.cancel() }
+            defer { analysisCancel = nil }
+            let turns = try await work.value
+            // One voice gets no label.
+            guard Set(turns.map(\.speaker)).count > 1 else { return }
+            transcriptSegments = SpeakerLabels.assign(turns, to: transcriptSegments)
+        } catch {
+            guard !transcriptionCancelled else { return }
+            if speechModels.speakers == .ready {
+                appendTranscriptionWarning("OpenAI could not find the speakers (\(error.localizedDescription)); they were found on this Mac instead.")
+                await labelSpeakers(url)
+            } else {
+                appendTranscriptionWarning("Speakers were not labeled: OpenAI: \(error.localizedDescription)")
+            }
         }
     }
 

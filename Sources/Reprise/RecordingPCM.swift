@@ -73,6 +73,24 @@ final class RecordingPCM: @unchecked Sendable {
         }
     }
 
+    /// Mono AAC at 32 kbps, for pieces sent online: an `.m4a` file, or raw AAC for an `.aac` name.
+    /// Gemini hears audio at 16 kbps, so this loses nothing it would use.
+    static func writeAAC(_ samples: [Float], sampleRate: Double, to url: URL) throws {
+        let settings: [String: Any] = [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: sampleRate, AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 32_000]
+        let file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let step = Int(sampleRate) * 10
+        var position = 0
+        while position < samples.count {
+            let count = min(step, samples.count - position)
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(count)),
+                  let channel = buffer.floatChannelData?[0] else { throw CaptureFailure("The recording could not be prepared to send.") }
+            buffer.frameLength = AVAudioFrameCount(count)
+            samples.withUnsafeBufferPointer { channel.update(from: $0.baseAddress! + position, count: count) }
+            try file.write(from: buffer)
+            position += count
+        }
+    }
+
     /// The start of the quietest `window` between the two positions.
     static func quietest(_ samples: [Float], from lower: Int, to upper: Int, window: Int) -> Int {
         let lower = max(0, lower), upper = min(samples.count - window, upper)

@@ -233,9 +233,18 @@ struct ChipFlow: Layout {
     var spacing: CGFloat = 6
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = rows(proposal.width ?? .infinity, subviews)
-        let width = rows.map { row in row.reduce(0) { $0 + $1.width } + spacing * CGFloat(max(0, row.count - 1)) }.max() ?? 0
-        let height = rows.map { $0.map(\.height).max() ?? 0 }.reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1))
+        // Plain loops: the same sums as one chained expression took CI's compiler too long.
+        var width: CGFloat = 0, height: CGFloat = 0
+        for (index, row) in rows(proposal.width ?? .infinity, subviews).enumerated() {
+            var rowWidth: CGFloat = 0, rowHeight: CGFloat = 0
+            for size in row {
+                rowWidth += size.width
+                rowHeight = max(rowHeight, size.height)
+            }
+            rowWidth += spacing * CGFloat(max(0, row.count - 1))
+            width = max(width, rowWidth)
+            height += rowHeight + (index > 0 ? spacing : 0)
+        }
         return CGSize(width: width, height: height)
     }
 

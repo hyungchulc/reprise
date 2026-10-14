@@ -16,7 +16,8 @@ final class RenderPreviewTests: XCTestCase {
         let model = try AppModel(root: root, keys: testKeys, models: root.appendingPathComponent("Models"))
         for engine in TranscriptionEngine.allCases {
             model.preferences.transcriptionEngine = engine
-            model.preferences.speakerLabels = engine == .whisperKit
+            model.preferences.speakerLabels = engine == .whisperKit || engine == .gemini
+            model.preferences.speakerFinder = engine == .gemini ? .openAI : .mac
             let form = Form {
                 Section("Transcription") { TranscriptionSettings(model: model, models: model.speechModels) }
                 Section("Speakers") { SpeakerLabelSettings(model: model, models: model.speechModels) }

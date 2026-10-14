@@ -39,8 +39,9 @@ struct AppPreferences: Codable, Equatable {
     var geminiAccess = GeminiAccess.subscription
     /// Empty picks the light Flash model.
     var geminiTranscriptionModel = ""
-    /// Finds who spoke when, on this Mac, and names each voice in the transcript.
+    /// Finds who spoke when and names each voice in the transcript.
     var speakerLabels = false
+    var speakerFinder = SpeakerFinder.mac
     var captions = CaptionPreferences()
     var assistant = AssistantPreferences()
 
@@ -79,6 +80,7 @@ struct AppPreferences: Codable, Equatable {
         geminiAccess = values.value(.geminiAccess, default: defaults.geminiAccess)
         geminiTranscriptionModel = values.value(.geminiTranscriptionModel, default: defaults.geminiTranscriptionModel)
         speakerLabels = values.value(.speakerLabels, default: defaults.speakerLabels)
+        speakerFinder = values.value(.speakerFinder, default: defaults.speakerFinder)
         captions = values.value(.captions, default: defaults.captions)
         assistant = values.value(.assistant, default: defaults.assistant)
     }

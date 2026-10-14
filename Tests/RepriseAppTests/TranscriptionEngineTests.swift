@@ -47,11 +47,24 @@ final class TranscriptionEngineTests: XCTestCase {
         let samples = (0..<48_000).map { Float(sin(Double($0) * 0.2) * 0.3) }
         for name in ["piece.m4a", "piece.aac"] {
             let url = folder.appendingPathComponent(name)
-            try GeminiTranscriber.write(samples, sampleRate: 16_000, to: url)
+            try RecordingPCM.writeAAC(samples, sampleRate: 16_000, to: url)
             let file = try AVAudioFile(forReading: url)
             XCTAssertEqual(file.fileFormat.sampleRate, 16_000)
             XCTAssertEqual(Double(file.length) / 16_000, 3, accuracy: 0.2, name)
         }
+    }
+
+    /// The first piece's voices keep their numbers wherever OpenAI recognizes them; other voices
+    /// get numbers of their own.
+    func testVoicesKeepTheirNumbersAcrossPieces() {
+        var voices = VoiceNumbers()
+        XCTAssertEqual(voices.number("A", piece: 1), 1)
+        XCTAssertEqual(voices.number("B", piece: 1), 2)
+        XCTAssertEqual(voices.name("B", piece: 1), "Speaker 2")
+        XCTAssertEqual(voices.number("Speaker 2", piece: 2), 2)
+        XCTAssertEqual(voices.number("A", piece: 2), 3, "an unknown voice of a later piece is someone new")
+        XCTAssertEqual(voices.number("A", piece: 3), 4)
+        XCTAssertEqual(voices.number("Speaker 1", piece: 3), 1)
     }
 
     // MARK: Live engines, on request
@@ -125,6 +138,26 @@ final class TranscriptionEngineTests: XCTestCase {
         let saved = try await store.moment(id: moment.id)
         print("Speakers:", saved?.text ?? "", saved?.transcriptionNote ?? "")
         XCTAssertGreaterThanOrEqual(SpeakerLabels.speakers(in: saved?.transcriptSegments ?? []).count, 2)
+    }
+
+    /// Two Korean voices told apart by OpenAI through this Mac's Codex ChatGPT sign-in, in two
+    /// pieces, so the second piece must recognize the voices of the first.
+    @MainActor func testOpenAIFindsSpeakersAcrossPiecesWhenRequested() async throws {
+        guard ProcessInfo.processInfo.environment["REPRISE_TEST_OPENAI"] == "1" else { throw XCTSkip("Set REPRISE_TEST_OPENAI=1 to find speakers with OpenAI.") }
+        let lines = (1...4).flatMap { item in [("Yuna", "\(item)번 안건입니다. 진행 상황을 짧게 말씀해 주세요."),
+                                               ("Reed (Korean (South Korea))", "네, \(item)번은 예정대로 진행 중이고 다음 주에 마무리됩니다.")] }
+        let (_, store, moment, root) = try await meeting(voices: lines)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("meetings/meeting.caf")
+        let audio = try await RecordingPCM(url: url, cipher: store.cipher, sampleRate: OpenAISpeakerFinder.sampleRate)
+        let credential = try await OpenAICredential.resolve(.chatGPT)
+        var finder = OpenAISpeakerFinder(credential: credential, language: "ko")
+        finder.pieceSeconds = audio.duration / 2
+        let start = Date()
+        let turns = try await finder.turns(audio, progress: { _, _ in })
+        print("OpenAI speakers in \(String(format: "%.1f", Date().timeIntervalSince(start))) s:", turns.map { "\(String(format: "%.1f-%.1f", $0.start, $0.end)) \($0.speaker)" })
+        XCTAssertEqual(Set(turns.map(\.speaker)), [1, 2], "two voices, numbered the same in both pieces")
+        withExtendedLifetime(moment) {}
     }
 
     /// A sealed meeting recording of the given voices, one after another with a pause between.
