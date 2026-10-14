@@ -1,0 +1,14 @@
+Speech models Reprise downloads on request
+
+Reprise bundles no model weights. When a person chooses them in Audio settings,
+Reprise downloads these models from Hugging Face into
+~/Library/Application Support/Reprise/Models:
+
+Whisper (OpenAI), converted for Core ML by Argmax, Inc.
+  https://huggingface.co/argmaxinc/whisperkit-coreml
+  License: MIT
+
+Speaker segmentation and embedding models (pyannote), converted for Core ML by Argmax, Inc.
+  https://huggingface.co/argmaxinc/speakerkit-coreml
+  License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+  https://creativecommons.org/licenses/by/4.0/

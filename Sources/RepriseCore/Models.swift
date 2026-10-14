@@ -45,8 +45,10 @@ public struct TranscriptSegment: Codable, Hashable, Sendable {
     public let text: String
     /// Recognizer locale that produced this text; nil for transcripts saved before multilingual support.
     public let locale: String?
-    public init(start: Double, end: Double, text: String, locale: String? = nil) {
-        self.start = start; self.end = end; self.text = text; self.locale = locale
+    /// Who spoke, such as "Speaker 1" or a name given to that speaker; nil when speakers were not labeled.
+    public let speaker: String?
+    public init(start: Double, end: Double, text: String, locale: String? = nil, speaker: String? = nil) {
+        self.start = start; self.end = end; self.text = text; self.locale = locale; self.speaker = speaker
     }
     public var isValid: Bool { start.isFinite && end.isFinite && start >= 0 && end > start && !text.isEmpty }
 }

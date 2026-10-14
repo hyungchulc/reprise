@@ -12,8 +12,12 @@ struct MemoryAudioPanel: View {
     var summarizing = false
     var summaryError: String?
     var providerName = ""
+    /// The engine Audio settings choose; the transcribe menu offers the others for one recording.
+    var engine = TranscriptionEngine.apple
     var onSummarize: () -> Void = {}
-    var onTranscribe: () -> Void = {}
+    /// nil transcribes with the chosen engine.
+    var onTranscribe: (TranscriptionEngine?) -> Void = { _ in }
+    var onRenameSpeaker: (String, String) -> Void = { _, _ in }
     var onDelete: (() -> Void)?
     var onClose: (() -> Void)?
     @State private var contentHeight: CGFloat = 44
@@ -38,10 +42,7 @@ struct MemoryAudioPanel: View {
                 ProgressView().controlSize(.small)
                 Text(recorder.status).repriseFont(.caption).foregroundStyle(.secondary).lineLimit(1)
             } else {
-                Button(action: onTranscribe) { Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90") }
-                    .help(moment.text.isEmpty ? "Transcribe recording" : "Transcribe again")
-                    .accessibilityLabel(moment.text.isEmpty ? "Transcribe recording" : "Transcribe again")
-                    .disabled(recorder.isBusy || recorder.isRecording || !audio.canPlay)
+                transcribeMenu
             }
             Button {
                 NSPasteboard.general.clearContents()
@@ -59,6 +60,23 @@ struct MemoryAudioPanel: View {
                 Button(action: onClose) { Image(systemName: "xmark") }.help("Close recording").accessibilityLabel("Close recording")
             }
         }
+    }
+
+    /// Transcribes with the chosen engine; its menu picks another engine for this recording.
+    private var transcribeMenu: some View {
+        Menu {
+            ForEach(TranscriptionEngine.allCases) { option in
+                Button { onTranscribe(option) } label: {
+                    if option == engine { Label("Transcribe with \(option.title)", systemImage: "checkmark") } else { Text("Transcribe with \(option.title)") }
+                }
+            }
+        } label: {
+            Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
+        } primaryAction: { onTranscribe(nil) }
+            .menuStyle(.borderlessButton).fixedSize()
+            .help(moment.text.isEmpty ? "Transcribe with \(engine.shortTitle); hold for other engines" : "Transcribe again with \(engine.shortTitle); hold for other engines")
+            .accessibilityLabel(moment.text.isEmpty ? "Transcribe recording" : "Transcribe again")
+            .disabled(recorder.isBusy || recorder.isRecording || !audio.canPlay)
     }
 
     private var content: some View {
@@ -84,16 +102,7 @@ struct MemoryAudioPanel: View {
                         LazyVStack(alignment: .leading, spacing: 10) {
                             if !segments.isEmpty {
                                 ForEach(segments.indices, id: \.self) { index in
-                                    let segment = segments[index]
-                                    HStack(alignment: .top, spacing: 12) {
-                                        Button { audio.seek(to: segment.start) } label: {
-                                            Text(Self.timestamp(segment.start)).monospacedDigit().frame(width: 52, alignment: .leading)
-                                        }.foregroundStyle(Color.accentColor).help("Seek to \(Self.timestamp(segment.start))")
-                                            .accessibilityLabel("Seek transcript to \(Self.timestamp(segment.start))").disabled(!audio.canPlay)
-                                        Text(segment.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                                    }.repriseFont().padding(8)
-                                        .background(activeSegment == index ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 6))
-                                        .id(index)
+                                    transcriptRow(index).id(index)
                                 }
                             } else {
                                 Text(recorder.transcribingMomentID == moment.id && !recorder.transcript.isEmpty ? recorder.transcript : (moment.text.isEmpty ? "No transcript was saved for this recording." : moment.text))
@@ -135,6 +144,32 @@ struct MemoryAudioPanel: View {
         .onAppear { page = summary != nil || summarizing || moment.text.isEmpty == false ? .summary : .transcript }
         .onChange(of: moment.id) { _, _ in page = .summary }
         .onChange(of: recorder.transcribingMomentID) { _, id in if id == moment.id { page = .transcript } }
+    }
+
+    /// One timed line, with the speaker's name where the speaker changes.
+    private func transcriptRow(_ index: Int) -> some View {
+        let segment = segments[index]
+        let newSpeaker = segment.speaker != nil && (index == 0 || segments[index - 1].speaker != segment.speaker)
+        return HStack(alignment: .top, spacing: 12) {
+            Button { audio.seek(to: segment.start) } label: {
+                Text(Self.timestamp(segment.start)).monospacedDigit().frame(width: 52, alignment: .leading)
+            }.foregroundStyle(Color.accentColor).help("Seek to \(Self.timestamp(segment.start))")
+                .accessibilityLabel("Seek transcript to \(Self.timestamp(segment.start))").disabled(!audio.canPlay)
+            VStack(alignment: .leading, spacing: 4) {
+                if newSpeaker, let speaker = segment.speaker {
+                    SpeakerChip(name: speaker, color: speakerColor(speaker)) { onRenameSpeaker(speaker, $0) }
+                        .disabled(recorder.transcribingMomentID == moment.id)
+                }
+                Text(segment.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }.repriseFont().padding(8)
+            .background(activeSegment == index ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func speakerColor(_ speaker: String) -> Color {
+        let palette: [Color] = [.blue, .orange, .green, .purple, .pink, .teal, .brown, .indigo]
+        let index = SpeakerLabels.speakers(in: segments).firstIndex(of: speaker) ?? 0
+        return palette[index % palette.count]
     }
 
     @ViewBuilder private var summaryContent: some View {
@@ -205,4 +240,37 @@ private struct SummaryHeightKey: PreferenceKey {
 private struct TranscriptHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 44
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+/// A speaker's name above their words. Clicking it renames that speaker everywhere in the recording.
+private struct SpeakerChip: View {
+    let name: String
+    let color: Color
+    let rename: (String) -> Void
+    @State private var editing = false
+    @State private var draft = ""
+    var body: some View {
+        Button { draft = name; editing = true } label: {
+            Text(name).repriseFont(.caption).fontWeight(.semibold).foregroundStyle(color)
+                .padding(.horizontal, 7).padding(.vertical, 2).background(color.opacity(0.14), in: Capsule())
+        }.buttonStyle(.plain).help("Rename \(name)").accessibilityLabel("Speaker \(name), rename")
+            .popover(isPresented: $editing, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Rename \(name)").repriseFont(.heading)
+                    TextField("Name", text: $draft).textFieldStyle(.roundedBorder).frame(width: 200).onSubmit(commit)
+                    Text("Every part this speaker said gets the new name.").repriseFont(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Spacer()
+                        Button("Cancel") { editing = false }
+                        Button("Rename", action: commit).keyboardShortcut(.defaultAction).disabled(SpeakerLabels.cleanName(draft) == nil)
+                    }
+                }.padding(14)
+            }
+    }
+
+    private func commit() {
+        guard let clean = SpeakerLabels.cleanName(draft) else { return }
+        editing = false
+        if clean != name { rename(clean) }
+    }
 }

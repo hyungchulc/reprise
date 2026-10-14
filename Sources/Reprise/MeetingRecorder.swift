@@ -4,6 +4,7 @@ import Combine
 import Speech
 import CoreGraphics
 import RepriseCore
+import WhisperKit
 
 @MainActor
 final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
@@ -42,16 +43,20 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
     private var transcriptionWarnings: [String] = []
     private var transcriptionCancelled = false
     private var transcriptionEnabled = true
-    private var transcriptionLocales: [String] = []
+    private var transcription = TranscriptionRequest()
+    /// While speakers are being labeled, Apple's phrases stay apart until each has its speaker.
+    private var phraseRows = false
     private var analysisCancel: (() async -> Void)?
     private var analysisReached: [String: Double] = [:]
     private var observers: [NSObjectProtocol] = []
     private let languages: SpeechLanguages
+    private let speechModels: LocalSpeechModels
 
-    init(store: MomentStore, root: URL, languages: SpeechLanguages) {
+    init(store: MomentStore, root: URL, languages: SpeechLanguages, speechModels: LocalSpeechModels) {
         self.store = store
         self.root = root
         self.languages = languages
+        self.speechModels = speechModels
         super.init()
         // A suspended machine must not silently resume its microphone session on wake.
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
@@ -73,10 +78,10 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
         for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
     }
 
-    func start(title: String = "Meeting", includeSystemAudio: Bool = true, transcribe: Bool = true, speechLocales: [String]) async {
+    func start(title: String = "Meeting", includeSystemAudio: Bool = true, transcribe: Bool = true, request: TranscriptionRequest) async {
         guard !isRecording, !starting, !finalizing else { return }
         transcriptionEnabled = transcribe
-        transcriptionLocales = speechLocales
+        transcription = request
         starting = true
         isBusy = true
         generation = UUID()
@@ -246,7 +251,7 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
                                 transcriptionNote: transcriptionEnabled ? "Transcription has not completed." : "Automatic transcription is off.")
             try await store.insert(moment)
             lastSavedMoment = moment
-            if transcriptionEnabled { await transcribeStoredAudio(moment, url: url, locales: transcriptionLocales) }
+            if transcriptionEnabled { await transcribeStoredAudio(moment, url: url, request: transcription) }
             status = lastError != nil ? "Meeting saved with warnings" : (transcript.isEmpty ? "Meeting saved, no transcript available" : "Meeting saved")
         } catch {
             // Keep the original audio recoverable when indexing fails, sealed like the rest.
@@ -264,7 +269,7 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
         return paths
     }
 
-    func transcribeSaved(_ moment: Moment, locales: [String]) async {
+    func transcribeSaved(_ moment: Moment, request: TranscriptionRequest) async {
         guard !isRecording, !isBusy, !starting, !finalizing, moment.kind == "meeting", let path = moment.videoPath else { return }
         let base = root.standardizedFileURL.resolvingSymlinksInPath()
         let url = base.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
@@ -273,35 +278,30 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
         }
         isBusy = true; finalizing = true; lastError = nil; transcriptionCancelled = false
         defer { isBusy = false; finalizing = false }
-        await transcribeStoredAudio(moment, url: url, locales: locales)
+        await transcribeStoredAudio(moment, url: url, request: request)
         status = lastError == nil ? "Transcript saved" : "Transcription needs attention"
     }
 
-    private func transcribeStoredAudio(_ moment: Moment, url: URL, locales selection: [String]) async {
+    private func transcribeStoredAudio(_ moment: Moment, url: URL, request: TranscriptionRequest) async {
         transcribingMomentID = moment.id; transcribingPath = moment.videoPath
         defer { transcribingMomentID = nil; transcribingPath = nil }
         transcript = ""; transcriptSegments = []; transcriptionWarnings = []
         if transcriptionCancelled {
             appendTranscriptionWarning("Transcription was interrupted. Complete audio was kept.")
-        } else if selection.isEmpty {
-            appendTranscriptionWarning("Choose at least one transcription language in Audio settings.")
         } else {
-            status = "Preparing on-device speech models"
-            let prepared = await languages.prepare(selection)
-            for note in prepared.notes { appendTranscriptionWarning(note) }
-            let names = prepared.locales.map { languages.name(for: $0.identifier(.bcp47)) }.joined(separator: ", ")
-            if prepared.locales.isEmpty || transcriptionCancelled {
-                if prepared.locales.isEmpty { appendTranscriptionWarning("No transcription language is ready on this Mac. Check Audio settings.") }
-            } else if #available(macOS 26, *), SpeechLanguages.usesSpeechAnalyzer {
-                await analyze(url, locales: prepared.locales)
-            } else if SFSpeechRecognizer.authorizationStatus() != .authorized {
-                appendTranscriptionWarning("Speech Recognition permission is not allowed. Enable it in Privacy settings to transcribe this recording.")
-            } else {
-                await transcribeChunks(url, locales: prepared.locales)
+            phraseRows = request.speakerLabels
+            defer { phraseRows = false }
+            switch request.engine {
+            case .openAI: await transcribeWithOpenAI(url, request: request)
+            case .whisperKit: await transcribeWithWhisper(url, request: request)
+            case .apple: await transcribeOnDevice(url, locales: request.locales)
             }
-            if transcript.isEmpty, transcriptionWarnings.isEmpty, !names.isEmpty {
-                appendTranscriptionWarning("No speech was recognized in \(names).")
+            if request.speakerLabels, !transcriptSegments.isEmpty {
+                if !transcriptionCancelled { await labelSpeakers(url) }
+                transcriptSegments = TranscriptMerge.rows(transcriptSegments)
             }
+            if !transcriptSegments.isEmpty { transcript = SpeakerLabels.text(transcriptSegments) }
+            await speechModels.unload()
         }
         do {
             let note = transcriptionWarnings.isEmpty ? nil : transcriptionWarnings.joined(separator: " ")
@@ -309,6 +309,158 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
                 segments: transcript.isEmpty ? (moment.transcriptSegments ?? []) : transcriptSegments, note: note)
             lastSavedMoment = try await store.moment(id: moment.id)
         } catch { appendWarning("Could not save transcript: \(error.localizedDescription)") }
+    }
+
+    /// Apple's speech models on this Mac, in every chosen language. The other engines fall back to it.
+    private func transcribeOnDevice(_ url: URL, locales selection: [String]) async {
+        transcriptSegments = []; transcript = ""
+        guard !selection.isEmpty else {
+            appendTranscriptionWarning("Choose at least one transcription language in Audio settings.")
+            return
+        }
+        status = "Preparing on-device speech models"
+        let prepared = await languages.prepare(selection)
+        for note in prepared.notes { appendTranscriptionWarning(note) }
+        let names = prepared.locales.map { languages.name(for: $0.identifier(.bcp47)) }.joined(separator: ", ")
+        if prepared.locales.isEmpty || transcriptionCancelled {
+            if prepared.locales.isEmpty { appendTranscriptionWarning("No transcription language is ready on this Mac. Check Audio settings.") }
+        } else if #available(macOS 26, *), SpeechLanguages.usesSpeechAnalyzer {
+            await analyze(url, locales: prepared.locales)
+        } else if SFSpeechRecognizer.authorizationStatus() != .authorized {
+            appendTranscriptionWarning("Speech Recognition permission is not allowed. Enable it in Privacy settings to transcribe this recording.")
+        } else {
+            await transcribeChunks(url, locales: prepared.locales)
+        }
+        if transcript.isEmpty, transcriptionWarnings.isEmpty, !names.isEmpty {
+            appendTranscriptionWarning("No speech was recognized in \(names).")
+        }
+    }
+
+    /// OpenAI's models through the ChatGPT sign-in or API key. Without either, or when OpenAI
+    /// fails, the recording is transcribed on this Mac instead.
+    private func transcribeWithOpenAI(_ url: URL, request: TranscriptionRequest) async {
+        let name = OpenAITranscriptionModel.named(request.openAIModel)
+        status = "Connecting to OpenAI"
+        do {
+            let credential = try await OpenAICredential.resolve(request.openAIAccess, codexPath: request.codexPath)
+            let audio = try await RecordingPCM(url: url, cipher: store.cipher, sampleRate: 24_000)
+            let duration = Int(audio.duration)
+            status = "Transcribing with \(name), 0 / \(duration) seconds"
+            let transcriber = CloudTranscriber(credential: credential, model: request.openAIModel, language: request.languageHint)
+            let report: @Sendable (Double) -> Void = { [weak self] seconds in
+                Task { @MainActor in
+                    guard let self, self.transcribingPath != nil else { return }
+                    self.status = "Transcribing with \(name), \(min(Int(seconds), duration)) / \(duration) seconds"
+                }
+            }
+            let work = Task.detached(priority: .userInitiated) { try await transcriber.transcribe(audio, progress: report) }
+            analysisCancel = { work.cancel(); audio.cancel() }
+            defer { analysisCancel = nil }
+            transcriptSegments = try await work.value
+            transcript = SpeakerLabels.text(transcriptSegments)
+            if transcriptSegments.isEmpty { appendTranscriptionWarning("\(name) heard no speech in this recording.") }
+        } catch {
+            guard !transcriptionCancelled else {
+                appendTranscriptionWarning("Transcription stopped. Complete audio was kept.")
+                return
+            }
+            appendTranscriptionWarning("OpenAI: \(error.localizedDescription) Transcribed with Apple on this Mac instead.")
+            await transcribeOnDevice(url, locales: request.locales)
+        }
+    }
+
+    /// Whisper on this Mac, five minutes of audio at a time.
+    private func transcribeWithWhisper(_ url: URL, request: TranscriptionRequest) async {
+        let name = "Whisper \(WhisperModel.named(request.whisperModel))"
+        guard speechModels.isReady(request.whisperModel) else {
+            appendTranscriptionWarning("\(name) is not downloaded. Transcribed with Apple on this Mac instead; download the model in Audio settings.")
+            await transcribeOnDevice(url, locales: request.locales)
+            return
+        }
+        status = "Loading \(name)"
+        do {
+            let kit = try await speechModels.whisperKit(request.whisperModel)
+            let audio = try await RecordingPCM(url: url, cipher: store.cipher, sampleRate: 16_000)
+            let duration = Int(audio.duration)
+            let language = request.languageHint
+            let stop = StopFlag()
+            status = "Transcribing with \(name), 0 / \(duration) seconds"
+            // Decoding and decoding results stay off the main thread; only progress comes back to it.
+            let work = Task.detached(priority: .userInitiated) { () -> [TranscriptSegment] in
+                var segments: [TranscriptSegment] = []
+                let options = DecodingOptions(language: language, temperatureFallbackCount: 3, usePrefillPrompt: language != nil,
+                                              detectLanguage: language == nil, skipSpecialTokens: true, chunkingStrategy: .vad)
+                try await audio.pieces(of: 300) { offset, samples in
+                    let results = try await kit.transcribe(audioArray: samples, decodeOptions: options, callback: { _ in stop.isSet ? false : nil })
+                    try Task.checkCancellation()
+                    for result in results {
+                        for piece in result.segments {
+                            let text = WhisperText.clean(piece.text)
+                            guard !text.isEmpty else { continue }
+                            segments.append(TranscriptSegment(start: offset + Double(piece.start), end: offset + Double(max(piece.end, piece.start + 0.1)),
+                                                              text: text, locale: result.language.isEmpty ? nil : result.language))
+                        }
+                    }
+                    let reached = min(duration, Int(offset) + samples.count / 16_000)
+                    let sofar = segments
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        self.transcriptSegments = sofar
+                        self.transcript = SpeakerLabels.text(sofar)
+                        self.status = "Transcribing with \(name), \(reached) / \(duration) seconds"
+                    }
+                }
+                return segments
+            }
+            analysisCancel = { stop.set(); work.cancel(); audio.cancel() }
+            defer { analysisCancel = nil }
+            transcriptSegments = try await work.value
+            transcript = SpeakerLabels.text(transcriptSegments)
+            if transcriptSegments.isEmpty { appendTranscriptionWarning("\(name) heard no speech in this recording.") }
+        } catch {
+            guard !transcriptionCancelled else {
+                appendTranscriptionWarning("Transcription stopped. Available text and complete audio were kept.")
+                return
+            }
+            appendTranscriptionWarning("\(name): \(error.localizedDescription) Transcribed with Apple on this Mac instead.")
+            await transcribeOnDevice(url, locales: request.locales)
+        }
+    }
+
+    /// Finds who spoke when, on this Mac, and names each voice in the transcript. One voice gets no label.
+    private func labelSpeakers(_ url: URL) async {
+        guard speechModels.speakers == .ready else {
+            appendTranscriptionWarning("Speakers were not labeled: the speaker model is not downloaded. Download it in Audio settings.")
+            return
+        }
+        status = "Finding speakers on this Mac"
+        do {
+            let audio = try await RecordingPCM(url: url, cipher: store.cipher, sampleRate: 16_000)
+            guard audio.duration <= SpeakerLabelLimit.seconds else {
+                appendTranscriptionWarning("Speakers are labeled in recordings up to two hours long.")
+                return
+            }
+            let kit = try await speechModels.speakerModel()
+            let report: @Sendable (Progress) -> Void = { [weak self] progress in
+                let percent = Int(progress.fractionCompleted * 100)
+                Task { @MainActor in self?.status = "Finding speakers on this Mac, \(percent)%" }
+            }
+            let work = Task.detached(priority: .userInitiated) { () -> [SpeakerTurn] in
+                let samples = try audio.read(Int(audio.duration * 16_000) + 16_000)
+                try Task.checkCancellation()
+                let result = try await kit.diarize(audioArray: samples, progressCallback: report)
+                return result.segments.compactMap { segment in
+                    segment.speaker.speakerId.map { SpeakerTurn(start: Double(segment.startTime), end: Double(segment.endTime), speaker: $0) }
+                }
+            }
+            analysisCancel = { work.cancel(); audio.cancel() }
+            defer { analysisCancel = nil }
+            let turns = try await work.value
+            guard Set(turns.map(\.speaker)).count > 1 else { return }
+            transcriptSegments = SpeakerLabels.assign(turns, to: transcriptSegments)
+        } catch {
+            if !transcriptionCancelled { appendTranscriptionWarning("Speakers were not labeled: \(error.localizedDescription)") }
+        }
     }
 
     func cancelTranscription() {
@@ -371,7 +523,7 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
             } else {
                 for (id, _, failure) in heard { if let failure { appendTranscriptionWarning("\(languages.name(for: id)): \(failure)") } }
             }
-            transcriptSegments = TranscriptMerge.segments(heard.map { (locale: $0.0, speech: $0.1) })
+            transcriptSegments = TranscriptMerge.segments(heard.map { (locale: $0.0, speech: $0.1) }, joinRows: !phraseRows)
             transcript = transcriptSegments.map(\.text).joined(separator: "\n")
         } catch { appendTranscriptionWarning("On-device transcription: \(error.localizedDescription)") }
     }
@@ -451,7 +603,7 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
                         }
                         heard[id] = pieces
                     }
-                    transcriptSegments = TranscriptMerge.segments(heard.map { (locale: $0.key, speech: $0.value) })
+                    transcriptSegments = TranscriptMerge.segments(heard.map { (locale: $0.key, speech: $0.value) }, joinRows: !phraseRows)
                     transcript = transcriptSegments.map(\.text).joined(separator: "\n")
                 } catch { appendTranscriptionWarning("Transcript gap at \(Int(offset)) seconds: \(error.localizedDescription)") }
                 try? FileManager.default.removeItem(at: chunkURL)

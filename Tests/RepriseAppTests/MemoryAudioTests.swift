@@ -23,7 +23,8 @@ final class MemoryAudioTests: XCTestCase {
         XCTAssertTrue(audio.canPlay, audio.error ?? "Audio unavailable")
         XCTAssertEqual(audio.duration, 2, accuracy: 0.01)
         XCTAssertFalse(audio.isPlaying, "Opening a recording must not auto-play")
-        let recorder = MeetingRecorder(store: try MomentStore(root: root, keys: testKeys), root: root, languages: SpeechLanguages())
+        let recorder = MeetingRecorder(store: try MomentStore(root: root, keys: testKeys), root: root, languages: SpeechLanguages(),
+                                       speechModels: LocalSpeechModels(directory: root.appendingPathComponent("Models")))
         let view = NSHostingView(rootView: MemoryAudioPanel(moment: moment, audio: audio, recorder: recorder, transcriptExpanded: .constant(true), transcriptHeight: 160))
         view.frame = NSRect(x: 0, y: 0, width: 620, height: 260)
         view.layoutSubtreeIfNeeded()

@@ -32,6 +32,12 @@ struct AppPreferences: Codable, Equatable {
     var edgeGlow: Bool? = true
     /// After transcription, the chosen AI provider summarizes each meeting and a notification says when it is ready.
     var summarizeMeetings = true
+    var transcriptionEngine = TranscriptionEngine.apple
+    var openAITranscriptionModel = OpenAITranscriptionModel.standard
+    var openAIAccess = OpenAIAccess.chatGPT
+    var whisperModel = WhisperModel.recommended
+    /// Finds who spoke when, on this Mac, and names each voice in the transcript.
+    var speakerLabels = false
 
     init() {}
 
@@ -61,6 +67,11 @@ struct AppPreferences: Codable, Equatable {
         pauseReminders = values.value(.pauseReminders, default: true)
         edgeGlow = values.value(.edgeGlow, default: true)
         summarizeMeetings = values.value(.summarizeMeetings, default: defaults.summarizeMeetings)
+        transcriptionEngine = values.value(.transcriptionEngine, default: defaults.transcriptionEngine)
+        openAITranscriptionModel = values.value(.openAITranscriptionModel, default: defaults.openAITranscriptionModel)
+        openAIAccess = values.value(.openAIAccess, default: defaults.openAIAccess)
+        whisperModel = values.value(.whisperModel, default: defaults.whisperModel)
+        speakerLabels = values.value(.speakerLabels, default: defaults.speakerLabels)
     }
 
     var colorScheme: ColorScheme? { followSystemAppearance ? nil : (darkMode ? .dark : .light) }

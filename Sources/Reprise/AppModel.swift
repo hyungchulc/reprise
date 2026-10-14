@@ -30,6 +30,8 @@ final class AppModel: ObservableObject {
     /// The overlay shows only the search box until a memory is opened from it.
     @Published var searchOnly = false
     let speechLanguages = SpeechLanguages()
+    /// Whisper and the speaker model, downloaded on request and run on this Mac.
+    let speechModels: LocalSpeechModels
     let archiver: FrameArchiver
     /// Set while screen recording runs; still set at launch means the last run ended without
     /// Pause or Quit, such as a crash, force quit or power loss, so recording resumes.
@@ -103,6 +105,12 @@ final class AppModel: ObservableObject {
                 let selection = preferences.speechLocales
                 Task { await speechLanguages.sync(selection) }
             }
+            // Choosing Whisper or speaker labels downloads what they need, with progress in Audio settings.
+            if preferences.transcriptionEngine == .whisperKit,
+               oldValue.transcriptionEngine != .whisperKit || oldValue.whisperModel != preferences.whisperModel {
+                speechModels.download(preferences.whisperModel)
+            }
+            if preferences.speakerLabels && !oldValue.speakerLabels { speechModels.downloadSpeakers() }
         }
     }
     @Published private(set) var archiveStatus: String?
@@ -129,15 +137,17 @@ final class AppModel: ObservableObject {
     private var archiveRequested = false
     private var rereadTask: Task<Void, Never>?
 
-    init(root: URL = ReprisePaths.root, keys: VaultKeys? = nil) throws {
+    /// `models` is where speech models are kept; every library on this Mac shares one folder by default.
+    init(root: URL = ReprisePaths.root, keys: VaultKeys? = nil, models: URL? = nil) throws {
         self.root = root
+        speechModels = models.map { LocalSpeechModels(directory: $0) } ?? LocalSpeechModels()
         let keys = try keys ?? Self.libraryKeys(root: root)
         self.keys = keys
         store = try MomentStore(root: root, keys: keys)
         // MCP consent written before encryption carried no signature; keep that choice once.
         if store.convertedFromPlaintext { try? MCPAccess.adoptUnsigned(root: root, keys: keys) }
         capture = CaptureEngine(store: store, root: root)
-        meeting = MeetingRecorder(store: store, root: root, languages: speechLanguages)
+        meeting = MeetingRecorder(store: store, root: root, languages: speechLanguages, speechModels: speechModels)
         archiver = FrameArchiver(store: store, root: root)
         searchHistory = SearchHistory.load(root: root, cipher: keys.cipher)
         let defaults = UserDefaults.standard
@@ -563,20 +573,47 @@ final class AppModel: ObservableObject {
         if preferences.transcribeMeetings && !SpeechLanguages.usesSpeechAnalyzer { await permissions.request(.speech) }
         if preferences.includeSystemAudio && !CGPreflightScreenCaptureAccess() { await permissions.request(.screenCapture) }
         await meeting.start(title: meetingDetector.candidate?.title ?? "Meeting", includeSystemAudio: preferences.includeSystemAudio,
-                            transcribe: preferences.transcribeMeetings, speechLocales: preferences.speechLocales)
+                            transcribe: preferences.transcribeMeetings, request: transcriptionRequest())
         if !meeting.isRecording, let message = meeting.lastError { error = message }
     }
 
-    func transcribeRecording() async {
+    /// The settings a transcription starts with; `engine` picks another engine for this one time.
+    func transcriptionRequest(_ engine: TranscriptionEngine? = nil) -> TranscriptionRequest {
+        TranscriptionRequest(engine: engine ?? preferences.transcriptionEngine, locales: preferences.speechLocales,
+                             openAIModel: preferences.openAITranscriptionModel, openAIAccess: preferences.openAIAccess,
+                             whisperModel: preferences.whisperModel, speakerLabels: preferences.speakerLabels, codexPath: codexPath)
+    }
+
+    /// The Codex chosen in AI & Models, also when another provider answers searches.
+    var codexPath: String? {
+        let codex = provider.provider == .codex ? provider : providerConfigurations[AIProviderKind.codex.rawValue]
+        return codex?.executablePath
+    }
+
+    func transcribeRecording(with engine: TranscriptionEngine? = nil) async {
         guard let moment = openRecording, !meeting.isBusy, !meeting.isRecording else { return }
-        if !SpeechLanguages.usesSpeechAnalyzer {
+        let request = transcriptionRequest(engine)
+        if request.engine == .apple && !SpeechLanguages.usesSpeechAnalyzer {
             await permissions.request(.speech)
             guard permissions.speech == .authorized else {
                 error = "Allow Speech Recognition in Privacy settings before transcribing."; return
             }
         }
-        await meeting.transcribeSaved(moment, locales: preferences.speechLocales)
+        await meeting.transcribeSaved(moment, request: request)
         if openRecording?.id == moment.id, let updated = meeting.lastSavedMoment, updated.id == moment.id { openRecording = updated }
+    }
+
+    /// Gives one speaker of a recording a name, in its transcript and text.
+    func renameSpeaker(_ speaker: String, to name: String, in moment: Moment) async {
+        guard let segments = moment.transcriptSegments, !meeting.isBusy || meeting.transcribingMomentID != moment.id else { return }
+        let renamed = SpeakerLabels.rename(speaker, to: name, in: segments)
+        guard renamed != segments else { return }
+        do {
+            try await store.updateTranscript(id: moment.id, text: SpeakerLabels.text(renamed), segments: renamed, note: moment.transcriptionNote)
+            guard let updated = try await store.moment(id: moment.id) else { return }
+            if openRecording?.id == moment.id { openRecording = updated }
+            await reload(preserve: true)
+        } catch { self.error = "The speaker could not be renamed: \(error.localizedDescription)" }
     }
 
     func saveSettings() async {
@@ -796,11 +833,22 @@ final class AppModel: ObservableObject {
         openTerminal(name: "Install", lines: "printf 'Installing \(kind.displayName) with its official installer:\\n  %s\\n\\n' '\(echoed)'\n\(command)\nprintf '\\nWhen it finishes, return to Reprise and choose Refresh. Press Return to close.\\n'")
     }
 
-    private func openTerminal(name: String, lines: String) {
+    /// Signs Codex in with ChatGPT for OpenAI transcription, or installs Codex first.
+    func signInToCodex() {
+        guard let codex = ChatGPTSignIn.codexExecutable(configured: codexPath) else {
+            guard let command = AIProviderKind.codex.installScript else { return }
+            openTerminal(name: "Install", lines: "\(command)\nprintf '\\nWhen it finishes, return to Reprise. Press Return to close.\\n'", tool: "Codex")
+            return
+        }
+        let path = "'" + codex.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        openTerminal(name: "Sign-In", lines: "unset OPENAI_API_KEY\n\(path) login\nprintf '\\nReturn to Reprise and choose Check. Press Return to close.\\n'", tool: "Codex")
+    }
+
+    private func openTerminal(name: String, lines: String, tool: String? = nil) {
         do {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Reprise-Login", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            let file = directory.appendingPathComponent("\(provider.provider.displayName.replacingOccurrences(of: " ", with: "-"))-\(name).command")
+            let file = directory.appendingPathComponent("\((tool ?? provider.provider.displayName).replacingOccurrences(of: " ", with: "-"))-\(name).command")
             let script = "#!/bin/zsh\n\(lines)\nread -r\nrm -- \"$0\"\n"
             try Data(script.utf8).write(to: file, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)

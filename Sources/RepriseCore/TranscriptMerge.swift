@@ -34,8 +34,27 @@ public enum TranscriptMerge {
         var weight: Double { max(0.01, end - start) * pow(min(1, max(0.05, confidence)), 2) }
     }
 
-    public static func segments(_ candidates: [(locale: String, speech: [RecognizedSpeech])]) -> [TranscriptSegment] {
-        coalesce(select(candidates.flatMap { phrases(from: $0.speech, locale: $0.locale) }))
+    /// With `joinRows` off, each phrase stays a segment of its own, so speakers can be told apart
+    /// before `rows` joins them.
+    public static func segments(_ candidates: [(locale: String, speech: [RecognizedSpeech])], joinRows: Bool = true) -> [TranscriptSegment] {
+        let chosen = select(candidates.flatMap { phrases(from: $0.speech, locale: $0.locale) })
+        guard joinRows else { return chosen.map { TranscriptSegment(start: $0.start, end: max($0.end, $0.start + 0.001), text: $0.text, locale: $0.locale) } }
+        return coalesce(chosen)
+    }
+
+    /// Readable rows from short segments: neighbors of one language and one speaker share a row
+    /// up to 30 seconds, as `coalesce` does for phrases.
+    public static func rows(_ segments: [TranscriptSegment]) -> [TranscriptSegment] {
+        var rows: [TranscriptSegment] = []
+        for segment in segments.sorted(by: { $0.start < $1.start }) {
+            if let last = rows.last, last.locale == segment.locale, last.speaker == segment.speaker,
+               segment.start - last.end <= 1.5, segment.end - last.start <= 30 {
+                rows[rows.count - 1] = TranscriptSegment(start: last.start, end: max(last.end, segment.end),
+                                                         text: last.text + joiner(for: segment.locale ?? "") + segment.text,
+                                                         locale: last.locale, speaker: last.speaker)
+            } else { rows.append(segment) }
+        }
+        return rows
     }
 
     /// Languages written without spaces between words join pieces directly.

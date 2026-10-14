@@ -197,6 +197,55 @@ a reply with tool calls is rejected. Search sends at most 16 memories and 14 KiB
 Settings downloads a suggested model (EXAONE 3.5 2.4B for Korean, Qwen 3.5 4B, Gemma 3
 4B) or any named model through `/api/pull`.
 
+## Transcription engines
+
+Meetings are transcribed after recording, with the engine chosen in Audio settings. Every
+engine reads the sealed recording through the vault's asset reader, decoding it in pieces
+to mono float PCM without a plaintext copy.
+
+- **Apple** runs Apple's speech models on this Mac in each chosen language: SpeechAnalyzer
+  on macOS 26, on-device SFSpeechRecognizer before it. It is also where every other engine
+  falls back.
+- **Whisper** runs through WhisperKit 1.1.1 (Argmax OSS). A model downloads from
+  `argmaxinc/whisperkit-coreml` into `~/Library/Application Support/Reprise/Models/whisper`,
+  with its tokenizer, and loads once right away so Core ML compiles it for the Neural Engine.
+  Recordings go through in five-minute pieces cut at the quietest moment near each edge,
+  with WhisperKit's voice-activity chunking, `skipSpecialTokens`, and the language passed as
+  a hint when exactly one is chosen; otherwise Whisper detects it. Bracketed sound marks are
+  dropped.
+- **OpenAI** uses Realtime transcription sessions. For each ten-minute piece Reprise mints
+  a client secret at `POST /v1/realtime/client_secrets` with
+  `session.type = "transcription"`, 24 kHz 16-bit PCM input and server voice detection, then
+  opens `wss://api.openai.com/v1/realtime` with the secret as a WebSocket subprotocol. The
+  audio is sent as fast as the connection takes it, then two seconds of silence and a commit.
+  `input_audio_buffer.speech_started` and `speech_stopped` time each utterance, and
+  `conversation.item.input_audio_transcription.completed` carries its text. A piece is done
+  when the closing commit is answered (usually `input_audio_buffer_commit_empty`, because
+  voice detection already took everything) and every committed item has its text. Three
+  pieces run at a time; a dropped connection retries its piece once. Models offered: GPT
+  Transcribe (default), GPT Live Transcribe, GPT-4o Transcribe, GPT-4o mini Transcribe and
+  GPT Realtime Whisper.
+
+The OpenAI bearer is either the ChatGPT sign-in of the Codex CLI or an OpenAI API key.
+For ChatGPT, Reprise starts `codex app-server -c features.plugins=false` with the same
+benign environment as other provider processes, sends `initialize`, `initialized` and
+`getAuthStatus` with `includeToken` and `refreshToken`, and accepts only an `authMethod`
+of ChatGPT. Codex is looked up where Codex is configured in AI & Models, then in the usual
+install places, then inside the ChatGPT app. The token stays in memory for one job. An API
+key is read from the login keychain item `local.aria.reprise.api-key` / `openai`. A 401 or
+403 says which account was refused; a 429 says the plan's or API account's limit was hit.
+Any failure, including a missing account, transcribes with Apple on this Mac instead, and
+the transcript note says why.
+
+**Speaker labels** use SpeakerKit's pyannote pipeline from `argmaxinc/speakerkit-coreml`
+(CC BY 4.0), downloaded into `Models/speakers`. The whole recording, up to two hours, is
+diarized at 16 kHz. While speakers are labeled, Apple's phrases stay separate; each segment
+takes the voice heard most during it (or one within a second), voices are numbered in
+speaking order, and a recording with one voice gets no labels. Neighboring segments of one
+speaker and language are then joined into rows of up to 30 seconds, and the transcript
+text starts a line with the speaker's name where the speaker changes. Renaming a speaker
+rewrites that recording's segments and text.
+
 ## Semantic search
 
 `MemorySearch.search(question:configuration:filter:timeZone:conversation:)` first
@@ -287,7 +336,9 @@ moments are excluded. Application names, window titles, timestamps, source
 paths, images, audio, library files, and other conversation history are omitted.
 Local citation labels map back to Moment IDs without transmitting those IDs.
 Semantic search additionally includes selected bounded provenance and up to four
-prior turns, with each prior question limited to 1 KiB and answer to 3 KiB.
+prior turns, with each prior question limited to 1 KiB and answer to 3 KiB. A longer
+thread also sends up to eight earlier questions, 300 bytes each, as `earlierQuestions`,
+when the provider's budget keeps at least two turns.
 The JSON provider input remains capped at 64 KiB. Saved search history reopens
 answers and evidence IDs without planning, inference or a new usage entry.
 Evidence is JSON-encoded quoted data, with instructions inside evidence explicitly

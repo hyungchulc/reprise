@@ -126,6 +126,8 @@ struct SettingsView: View {
             LabeledContent("Microphone", value: "System default input")
             LabeledContent("Recording limit", value: "4 hours")
         }
+        Section("Transcription") { TranscriptionSettings(model: model, models: model.speechModels) }
+        Section("Speakers") { SpeakerLabelSettings(model: model, models: model.speechModels) }
         Section("Transcription Languages") {
             TranscriptionLanguageSettings(model: model, languages: model.speechLanguages)
         }
@@ -352,6 +354,7 @@ struct AISettings: View {
             Stepper("Request timeout: \(Int(model.provider.timeoutSeconds)) s", value: $model.provider.timeoutSeconds, in: 15...180, step: 15)
         }
         .onDisappear { Task { await model.saveSettings() } }
+        Section("API Keys") { APIKeySettings() }
     }
 
     static func about(_ kind: AIProviderKind) -> String {
@@ -479,6 +482,10 @@ struct TranscriptionLanguageSettings: View {
              ? "Each meeting is transcribed on this Mac in every chosen language, and each part keeps the language that fits it. Speech models download automatically, up to \(SpeechLanguageSelection.maximum) languages."
              : "Each meeting is transcribed in every chosen language, and each part keeps the language that fits it. Add on-device models in System Settings > Keyboard > Dictation.")
             .repriseFont(.caption).foregroundStyle(.secondary)
+        if model.preferences.transcriptionEngine.languagesAreHints {
+            Text("\(model.preferences.transcriptionEngine.shortTitle) recognizes languages on its own; with one language chosen, it is passed on as a hint. Apple's models use these languages when Reprise transcribes on this Mac instead.")
+                .repriseFont(.caption).foregroundStyle(.secondary)
+        }
     }
 
     @ViewBuilder private func state(_ value: SpeechLanguages.State?) -> some View {

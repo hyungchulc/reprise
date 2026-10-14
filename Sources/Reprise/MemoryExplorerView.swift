@@ -92,6 +92,18 @@ struct MemoryExplorerView: View {
         .animation(searchAnimation, value: min(resultHeight, 440))
     }
 
+    /// The open recording's player, transcript and summary.
+    private func recordingPanel(_ moment: Moment, height: CGFloat) -> MemoryAudioPanel {
+        MemoryAudioPanel(moment: moment, audio: audio, recorder: model.meeting, transcriptExpanded: $transcriptExpanded,
+                         transcriptHeight: height, summary: model.summaries[moment.id], summarizing: model.summarizing.contains(moment.id),
+                         summaryError: model.summaryErrors[moment.id], providerName: model.provider.provider.displayName,
+                         engine: model.preferences.transcriptionEngine,
+                         onSummarize: { Task { await model.summarize(moment) } },
+                         onTranscribe: { engine in Task { await model.transcribeRecording(with: engine) } },
+                         onRenameSpeaker: { speaker, name in Task { await model.renameSpeaker(speaker, to: name, in: moment) } },
+                         onDelete: { deleteRecordingConfirmation = true }, onClose: { audio.pause(); model.closeRecording() })
+    }
+
     private func dialogs(_ content: some View) -> some View {
         content
         .sheet(isPresented: $model.showSettings) { SettingsView(model: model) }
@@ -192,13 +204,7 @@ struct MemoryExplorerView: View {
             Spacer(minLength: 0)
             // The open recording stays in view above the bar while search is open, too.
             if let moment = model.openRecording {
-                MemoryAudioPanel(moment: moment, audio: audio, recorder: model.meeting, transcriptExpanded: $transcriptExpanded,
-                                 transcriptHeight: min(240, max(80, geometry.size.height - 450)),
-                                 summary: model.summaries[moment.id], summarizing: model.summarizing.contains(moment.id),
-                                 summaryError: model.summaryErrors[moment.id], providerName: model.provider.provider.displayName,
-                                 onSummarize: { Task { await model.summarize(moment) } },
-                                 onTranscribe: { Task { await model.transcribeRecording() } },
-                                 onDelete: { deleteRecordingConfirmation = true }, onClose: { audio.pause(); model.closeRecording() })
+                recordingPanel(moment, height: min(240, max(80, geometry.size.height - 450)))
                     .frame(width: min(780, geometry.size.width - 48))
                     .excludesMemoryScrolling().padding(.bottom, 12)
             }

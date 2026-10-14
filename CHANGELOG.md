@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.0-alpha.1
+
+- **Choose the transcription engine.** Settings > Audio & Meetings offers three:
+  Apple's speech models on this Mac (as before), OpenAI's Whisper on this Mac through
+  WhisperKit, and OpenAI's newest transcription models online. Whisper downloads once
+  from Hugging Face, in the size you pick (Large v3 Turbo, 627 MB, is recommended), and
+  recordings never leave the Mac. OpenAI offers GPT Transcribe, GPT Live Transcribe,
+  GPT-4o Transcribe, GPT-4o mini Transcribe and GPT Realtime Whisper.
+- **OpenAI with a ChatGPT plan or an API key.** With a ChatGPT plan, Reprise asks the
+  Codex CLI on this Mac for its ChatGPT sign-in each time, keeps it in memory and never
+  stores it. Without a subscription, an OpenAI API key works instead; it stays in the
+  login keychain. The recording goes to OpenAI in ten-minute pieces, three at a time,
+  and an hour of audio takes about a minute. When neither account works, or OpenAI
+  fails, the recording is transcribed with Apple on this Mac, and the transcript says so.
+- **Transcribe again with another engine.** The transcribe button in a recording uses
+  the chosen engine; its menu transcribes that one recording with another.
+- **Speaker labels.** Turn on Label speakers and a speaker model, about 30 MB, finds who
+  is speaking, on this Mac, with every engine. The transcript and its text name each
+  speaker, such as Speaker 1; click a name to rename that speaker everywhere in the
+  recording, so summaries and searches say who said what. Recordings up to two hours
+  are labeled.
+- **Long follow-up threads keep their topic.** Each question still carries the last four
+  turns in full, and now also up to eight earlier questions of the same thread.
+
 ## 0.8.2-alpha.2
 
 - **The search bar fits again.** Fast mode is a bolt button beside the thinking level,

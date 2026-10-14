@@ -33,8 +33,8 @@ final class MultilingualTranscriptionTests: XCTestCase {
         let store = try MomentStore(root: root, keys: testKeys)
         let moment = Moment(appName: "Meeting", windowTitle: "Mixed", videoPath: "meetings/mixed.caf", kind: "meeting")
         try await store.insert(moment)
-        let recorder = MeetingRecorder(store: store, root: root, languages: SpeechLanguages())
-        await recorder.transcribeSaved(moment, locales: ["ko-KR", "en-US"])
+        let recorder = MeetingRecorder(store: store, root: root, languages: SpeechLanguages(), speechModels: LocalSpeechModels(directory: root.appendingPathComponent("Models")))
+        await recorder.transcribeSaved(moment, request: TranscriptionRequest(locales: ["ko-KR", "en-US"]))
         let saved = try await store.moment(id: moment.id)
         let segments = saved?.transcriptSegments ?? []
         print("Transcript:", segments.map { "[\($0.locale ?? "?") \(String(format: "%.1f-%.1f", $0.start, $0.end))] \($0.text)" }.joined(separator: "\n"))
