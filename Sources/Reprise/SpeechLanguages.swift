@@ -16,6 +16,8 @@ final class SpeechLanguages: ObservableObject {
 
     @Published private(set) var options: [Option] = []
     @Published private(set) var states: [String: State] = [:]
+    /// Languages another feature, such as live captions, keeps installed outside the meeting choice.
+    var alsoKept: Set<String> = []
     private var catalog: [String: Locale] = [:]
     private var loaded = false
     private var installs: [String: Task<Void, Never>] = [:]
@@ -40,7 +42,7 @@ final class SpeechLanguages: ObservableObject {
     func sync(_ selection: [String]) async {
         await loadCatalog()
         if #available(macOS 26, *), Self.usesSpeechAnalyzer {
-            for locale in await AssetInventory.reservedLocales where !selection.contains(locale.identifier(.bcp47)) {
+            for locale in await AssetInventory.reservedLocales where !selection.contains(locale.identifier(.bcp47)) && !alsoKept.contains(locale.identifier(.bcp47)) {
                 await AssetInventory.release(reservedLocale: locale)
             }
         }

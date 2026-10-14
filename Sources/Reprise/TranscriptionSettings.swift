@@ -93,8 +93,8 @@ struct OpenAIAccessRow: View {
                 .disabled(access.state == .checking)
         }
         Text(model.preferences.openAIAccess == .chatGPT
-             ? "\(purpose) uses the ChatGPT plan the Codex CLI on this Mac is signed in with, and counts toward that plan's limits. The sign-in stays with Codex; Reprise asks Codex for it each time and never stores it."
-             : "\(purpose) is billed to the OpenAI API account of the key, which stays in this Mac's login keychain.")
+             ? "\(purpose) and Reprise's other OpenAI features use the ChatGPT plan the Codex CLI on this Mac is signed in with, and count toward that plan's limits. The sign-in stays with Codex; Reprise asks Codex for it each time and never stores it."
+             : "\(purpose) and Reprise's other OpenAI features are billed to the OpenAI API account of the key, which stays in this Mac's login keychain.")
             .repriseFont(.caption).foregroundStyle(.secondary)
             .task(id: model.preferences.openAIAccess) { access.check(model.preferences.openAIAccess, codexPath: model.codexPath) }
     }

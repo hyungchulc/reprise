@@ -27,6 +27,11 @@ final class AppModel: ObservableObject {
     let shortcut = GlobalShortcut()
     /// Opens only the search box, with nothing behind it. It has no default and stays unset until recorded.
     let searchOnlyShortcut = GlobalShortcut(storageKey: "searchOnlyShortcut", identifier: 2, standard: nil)
+    /// Turns live captions on and off; Record Meeting starts and stops a recording. Neither has a default.
+    let captionsShortcut = GlobalShortcut(storageKey: "captionsShortcut", identifier: 3, standard: nil)
+    let meetingShortcut = GlobalShortcut(storageKey: "meetingShortcut", identifier: 4, standard: nil)
+    /// Live captions over the screen, translated as they are heard.
+    let captions = LiveCaptions()
     /// The overlay shows only the search box until a memory is opened from it.
     @Published var searchOnly = false
     let speechLanguages = SpeechLanguages()
@@ -111,6 +116,11 @@ final class AppModel: ObservableObject {
                 speechModels.download(preferences.whisperModel)
             }
             if preferences.speakerLabels && !oldValue.speakerLabels { speechModels.downloadSpeakers() }
+            // Running captions follow a new language, input or account at once; their look changes as it is set.
+            captions.style = preferences.captions
+            if captions.isRunning, preferences.captions.listening != oldValue.captions.listening || preferences.openAIAccess != oldValue.openAIAccess {
+                Task { await startCaptions() }
+            }
         }
     }
     @Published private(set) var archiveStatus: String?
@@ -199,6 +209,7 @@ final class AppModel: ObservableObject {
         NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange).sink { [weak self] _ in
             Task { @MainActor in self?.timeZone = .autoupdatingCurrent; await self?.reload() }
         }.store(in: &subscriptions)
+        captions.style = preferences.captions
     }
 
     func start() async {
@@ -560,6 +571,22 @@ final class AppModel: ObservableObject {
         if let message = capture.lastError { error = message }
     }
 
+    /// `announce` tells, in a notification, what a shortcut did while Reprise stayed out of sight.
+    func toggleMeeting(announce: Bool = false) async {
+        guard announce else { await toggleMeeting(); return }
+        let stopping = meeting.isRecording
+        error = nil
+        await toggleMeeting()
+        if let message = error {
+            error = nil
+            notify("The meeting was not recorded", message)
+        } else if stopping {
+            notify("Meeting saved", "Open Reprise to play it and read its transcript.", momentID: meeting.lastSavedMoment?.id)
+        } else if meeting.isRecording {
+            notify("Recording the meeting", "Press the same shortcut to stop and save.")
+        }
+    }
+
     func toggleMeeting() async {
         guard !meeting.isBusy else { return }
         if meeting.isRecording {
@@ -576,6 +603,23 @@ final class AppModel: ObservableObject {
                             transcribe: preferences.transcribeMeetings, request: transcriptionRequest())
         if !meeting.isRecording, let message = meeting.lastError { error = message }
     }
+
+    /// Turns live captions on or off.
+    func toggleCaptions() async {
+        if captions.isRunning { captions.stop() } else { await startCaptions() }
+    }
+
+    /// Starts captions with the settings as they are, after asking for what the chosen input needs.
+    func startCaptions() async {
+        switch preferences.captions.input {
+        case .system: if !CGPreflightScreenCaptureAccess() { await permissions.request(.screenCapture) }
+        case .microphone: await permissions.request(.microphone)
+        }
+        captions.start(preferences.captions, access: preferences.openAIAccess, codexPath: codexPath, keep: speechLanguages)
+    }
+
+    /// Shows the captions to drag into place, also before they start.
+    func moveCaptions() { captions.moving = true }
 
     /// The settings a transcription starts with; `engine` picks another engine for this one time.
     func transcriptionRequest(_ engine: TranscriptionEngine? = nil) -> TranscriptionRequest {
@@ -952,6 +996,19 @@ final class AppModel: ObservableObject {
             content.body = "Open Reprise to read the key points, decisions and action items."
             content.userInfo = ["momentID": id]
             center.add(UNNotificationRequest(identifier: "summary-\(id)", content: content, trigger: nil))
+        }
+    }
+
+    /// Names no meeting content, like the summary notification.
+    private func notify(_ title: String, _ body: String, momentID: String? = nil) {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            if let momentID { content.userInfo = ["momentID": momentID] }
+            center.add(UNNotificationRequest(identifier: "meeting-\(UUID().uuidString)", content: content, trigger: nil))
         }
     }
 

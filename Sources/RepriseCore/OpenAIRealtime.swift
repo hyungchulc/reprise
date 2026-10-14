@@ -10,9 +10,9 @@ public enum ChatGPTSignIn {
         case unavailable(String)
         public var errorDescription: String? {
             switch self {
-            case .noCodex: "OpenAI transcription signs in through the Codex CLI. Install Codex, then sign in with ChatGPT."
-            case .notSignedIn: "Codex is not signed in. Choose Sign In next to OpenAI in Audio settings and sign in with ChatGPT."
-            case .notChatGPT: "Codex is signed in with an API key. OpenAI transcription uses a ChatGPT plan; sign in to Codex with ChatGPT."
+            case .noCodex: "Reprise reaches OpenAI with a ChatGPT plan through the Codex CLI. Install Codex, then sign in with ChatGPT."
+            case .notSignedIn: "Codex is not signed in. Choose Sign In with ChatGPT in Settings, next to the OpenAI account."
+            case .notChatGPT: "Codex is signed in with an API key, not a ChatGPT plan. Sign in to Codex with ChatGPT, or choose OpenAI API key as the account."
             case .unavailable(let detail): "Codex could not share its ChatGPT sign-in: \(detail) Updating Codex may help."
             }
         }
@@ -139,10 +139,20 @@ public enum OpenAIRealtime {
         return ["type": "transcription", "audio": ["input": input]]
     }
 
-    /// A live translation session: speech in any supported language becomes text, and speech, in `language`.
-    public static func translationSession(language: String) -> [String: Any] {
-        ["model": "gpt-realtime-translate", "audio": ["output": ["language": language]]]
+    /// A live translation session: speech in any supported language becomes text, and speech, in
+    /// `language`. With `transcribeInput`, the spoken words come back too.
+    public static func translationSession(language: String, transcribeInput: Bool = false) -> [String: Any] {
+        var audio: [String: Any] = ["output": ["language": language]]
+        if transcribeInput { audio["input"] = ["transcription": ["model": OpenAIRealtime.liveTranscriptionModel]] }
+        return ["model": "gpt-realtime-translate", "audio": audio]
     }
+
+    public static let liveTranscriptionModel = "gpt-live-transcribe"
+
+    /// Languages live translation writes, as OpenAI accepts them.
+    public static let translationLanguages = ["af", "ar", "az", "be", "bg", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et",
+        "fa", "fi", "fr", "gl", "he", "hi", "hr", "hu", "hy", "id", "is", "it", "ja", "kk", "kn", "ko", "lt", "lv", "mi", "mk", "mr",
+        "ms", "ne", "nl", "no", "pl", "pt", "ro", "ru", "sk", "sl", "sr", "sv", "sw", "ta", "th", "tl", "tr", "uk", "ur", "vi", "zh"]
 
     static let base = URL(string: "https://api.openai.com/v1/realtime")!
 
@@ -179,7 +189,7 @@ public enum OpenAIRealtime {
     }
 
     /// 16-bit little-endian PCM of samples in -1...1.
-    public static func pcm16(_ samples: ArraySlice<Float>) -> Data {
+    public static func pcm16<Samples: Collection>(_ samples: Samples) -> Data where Samples.Element == Float {
         var data = Data(count: samples.count * 2)
         data.withUnsafeMutableBytes { raw in
             let out = raw.bindMemory(to: Int16.self)

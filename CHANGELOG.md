@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.0-alpha.2
+
+- **Live captions.** Reprise listens to what the Mac plays, or to the microphone, and
+  shows captions over every app, also full-screen video, translated into your language
+  as they are spoken: a Swedish video gets Korean captions about two seconds behind the
+  speech. Turn them on from the Reprise menu or with a shortcut. Move Captions lets you
+  drag them anywhere, such as below a video; clicks pass through them. Captions are not
+  saved.
+- **Captions by OpenAI or by this Mac.** OpenAI's live translation recognizes the spoken
+  language by itself and writes captions in 57 languages, with the ChatGPT plan of the
+  Codex CLI on this Mac or an OpenAI API key. On macOS 26, this Mac makes captions with
+  Apple's speech recognition and translation once the spoken language is chosen, and
+  nothing leaves the Mac. Settings > Live Captions says when this Mac cannot recognize
+  or translate a language, and downloads a translation language when it can. Automatic
+  uses OpenAI when its account works and this Mac otherwise, also when the connection
+  drops.
+- **Caption style.** Text size, color, background, number of lines, top or bottom, and
+  the spoken words above the translation, with a preview.
+- **More shortcuts.** Settings > General > Shortcuts sets shortcuts for Live Captions
+  and Record Meeting beside Search Memory and Search Only. They work in every app; the
+  next press turns captions off or stops and saves the meeting, and a notification says
+  what the meeting shortcut did. The menu bar menu and a new Audio menu have the same
+  commands.
+
 ## 0.9.0-alpha.1
 
 - **Choose the transcription engine.** Settings > Audio & Meetings offers three:

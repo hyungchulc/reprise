@@ -246,6 +246,41 @@ speaker and language are then joined into rows of up to 30 seconds, and the tran
 text starts a line with the speaker's name where the speaker changes. Renaming a speaker
 rewrites that recording's segments and text.
 
+## Live captions
+
+Live captions hear Mac audio through an audio-only ScreenCaptureKit stream that leaves out
+Reprise's own sounds, or the microphone through AVAudioEngine, as mono float PCM. Finding
+and starting the stream each time out after 15 seconds.
+
+- **OpenAI.** For captions in another language, Reprise mints a client secret at
+  `POST /v1/realtime/translations/client_secrets` for `gpt-realtime-translate`, with
+  `audio.output.language` set to the caption language and, when the spoken words are
+  shown, `audio.input.transcription.model = "gpt-live-transcribe"`. It opens
+  `wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate` and sends
+  24 kHz 16-bit PCM in `session.input_audio_buffer.append` events of about 100 ms as audio
+  arrives. `session.output_transcript.delta` carries the caption text and
+  `session.input_transcript.delta` the spoken words; the translated speech the session also
+  returns is ignored. Captions in the spoken language use a transcription session with
+  `gpt-live-transcribe`, which takes no turn detection and streams
+  `conversation.item.input_audio_transcription.delta`. While a session connects, the last
+  two seconds of audio wait. A dropped session reconnects up to three times, each with a
+  fresh sign-in; a session OpenAI ends after running for a while is followed by the next
+  at once. With Automatic, any other failure moves captions to this Mac when the spoken
+  language is chosen.
+- **This Mac** (macOS 26) recognizes speech with SpeechAnalyzer: SpeechTranscriber with
+  volatile and fast results where it has the language, otherwise DictationTranscriber with
+  punctuation and frequent finalization, which covers more languages, such as Swedish. Its
+  model downloads through AssetInventory when captions start. A `TranslationSession` for
+  the installed pair translates, with the low-latency model on macOS 26.4 and later and
+  the standard model where the low-latency one lacks a language (26.4 has no Swedish).
+  Settings checks `LanguageAvailability` and downloads a missing pair with
+  `prepareTranslation()`. Volatile text is translated as it changes, and a translation that
+  finishes after a newer one is dropped.
+
+Captions keep the last 600 characters, start a new line after a sentence, and clear after
+six quiet seconds. Lines wrap by estimated width, a wide character such as Hangul counting
+as about one em. Captions are not stored.
+
 ## Semantic search
 
 `MemorySearch.search(question:configuration:filter:timeZone:conversation:)` first

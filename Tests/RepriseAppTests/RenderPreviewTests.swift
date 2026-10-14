@@ -34,6 +34,74 @@ final class RenderPreviewTests: XCTestCase {
         try render(panel.frame(width: 640).padding(), to: URL(fileURLWithPath: folder).appendingPathComponent("panel-speakers.png"))
     }
 
+    @MainActor func testRenderCaptionViewsWhenRequested() async throws {
+        guard let folder = ProcessInfo.processInfo.environment["REPRISE_RENDER"] else { throw XCTSkip("Set REPRISE_RENDER to a folder to render previews.") }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-render-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = NSApplication.shared
+        let model = try AppModel(root: root, keys: testKeys, models: root.appendingPathComponent("Models"))
+        for engine in CaptionEngine.allCases {
+            model.preferences.captions.engine = engine
+            model.preferences.captions.spoken = engine == .onDevice ? "sv-SE" : ""
+            model.preferences.captions.showOriginal = engine == .automatic
+            let form = Form { CaptionSettings(model: model, captions: model.captions) }.formStyle(.grouped).frame(width: 592, height: 1400)
+            try render(form, to: URL(fileURLWithPath: folder).appendingPathComponent("captions-\(engine.rawValue).png"))
+        }
+        var style = model.preferences.captions
+        style.showOriginal = true
+        let captions = ZStack(alignment: .bottom) {
+            Color(white: 0.25)
+            VStack(spacing: 30) {
+                CaptionBlock(text: "안녕하세요, 환영합니다. 오늘은 집에서 시나몬 롤을 어떻게 굽는지 이야기해 볼게요.",
+                             spoken: "Hej och välkommen, idag pratar vi om hur man bakar kanelbullar hemma.", style: style, width: 1000)
+                CaptionBlock(text: "Captions appear here", moving: true, style: model.preferences.captions, width: 1000)
+                CaptionBlock(text: "", notice: "Captions in Korean, from Mac audio, with OpenAI", style: model.preferences.captions, width: 1000)
+            }.padding(30)
+        }.frame(width: 1080)
+        try render(captions, to: URL(fileURLWithPath: folder).appendingPathComponent("captions-overlay.png"))
+    }
+
+    /// The floating caption panel: shown while captions run, click-through, draggable only while moving.
+    @MainActor func testCaptionPanelFollowsCaptionsWhenRequested() async throws {
+        guard let folder = ProcessInfo.processInfo.environment["REPRISE_RENDER"] else { throw XCTSkip("Set REPRISE_RENDER to a folder to render previews.") }
+        _ = NSApplication.shared
+        let captions = LiveCaptions()
+        captions.makeFeed = { _, _, _, _ in SilentFeed() }
+        var saved: [[Double]] = []
+        let controller = CaptionWindowController(captions: captions) { saved.append($0) }
+        var style = CaptionPreferences()
+        style.engine = .onDevice
+        style.spoken = "sv-SE"
+        captions.style = style
+        captions.start(style, access: .chatGPT, codexPath: nil, keep: SpeechLanguages())
+        let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? CaptionPanel }.first)
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertTrue(panel.ignoresMouseEvents)
+        XCTAssertFalse(panel.canBecomeKey)
+        XCTAssertEqual(panel.level, .statusBar)
+        let bottom = panel.frame
+        style.position = .top
+        captions.style = style
+        XCTAssertGreaterThan(panel.frame.minY, bottom.minY)
+        captions.moving = true
+        XCTAssertFalse(panel.ignoresMouseEvents)
+        XCTAssertTrue(panel.canBecomeKey)
+        captions.moving = false
+        XCTAssertTrue(saved.isEmpty, "Done without dragging keeps the chosen position")
+        captions.moving = true
+        panel.setFrameOrigin(NSPoint(x: panel.frame.minX + 40, y: panel.frame.minY - 60))
+        captions.moving = false
+        XCTAssertEqual(saved.count, 1)
+        let content = try XCTUnwrap(panel.contentView)
+        let rep = try XCTUnwrap(content.bitmapImageRepForCachingDisplay(in: content.bounds))
+        content.cacheDisplay(in: content.bounds, to: rep)
+        try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: folder).appendingPathComponent("caption-panel.png"))
+        captions.stop()
+        XCTAssertFalse(panel.isVisible)
+        withExtendedLifetime(controller) {}
+    }
+
     @MainActor private func render(_ view: some View, to url: URL) throws {
         let host = NSHostingView(rootView: view)
         host.frame = NSRect(origin: .zero, size: host.fittingSize)
@@ -42,4 +110,10 @@ final class RenderPreviewTests: XCTestCase {
         host.cacheDisplay(in: host.bounds, to: rep)
         try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: url)
     }
+}
+
+/// Audio that never arrives.
+private final class SilentFeed: LiveAudioFeed {
+    func start() async throws {}
+    func stop() {}
 }

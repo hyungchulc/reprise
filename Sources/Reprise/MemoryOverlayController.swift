@@ -17,6 +17,9 @@ final class MemoryOverlayController {
     private var pauseReminder: PauseReminderController?
     private var previousPresentation: NSApplication.PresentationOptions?
     private var configuredScreenFrame: NSRect?
+    private var captionWindow: CaptionWindowController?
+    /// When each on-and-off shortcut last acted; one press can arrive as a hotkey and as a key event.
+    private var lastToggle: [UInt32: Date] = [:]
 
     init(model: AppModel) {
         self.model = model
@@ -61,6 +64,14 @@ final class MemoryOverlayController {
         model.shortcut.activate()
         model.searchOnlyShortcut.onTrigger = { [weak self] in self?.showSearch(only: true) }
         model.searchOnlyShortcut.activate()
+        captionWindow = CaptionWindowController(captions: model.captions) { [weak model] center in
+            model?.preferences.captions.center = center
+            model?.preferences.captions.position = .custom
+        }
+        model.captionsShortcut.onTrigger = { [weak self] in self?.toggleOnce(3) { await $0.toggleCaptions() } }
+        model.captionsShortcut.activate()
+        model.meetingShortcut.onTrigger = { [weak self] in self?.toggleOnce(4) { await $0.toggleMeeting(announce: true) } }
+        model.meetingShortcut.activate()
         events = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             // Local key equivalents can arrive without Carbon's global hotkey event.
@@ -69,6 +80,12 @@ final class MemoryOverlayController {
             }
             if event.type == .keyDown, self.model.searchOnlyShortcut.matches(event) {
                 self.showSearch(only: true); return nil
+            }
+            if event.type == .keyDown, self.model.captionsShortcut.matches(event) {
+                self.toggleOnce(3) { await $0.toggleCaptions() }; return nil
+            }
+            if event.type == .keyDown, self.model.meetingShortcut.matches(event) {
+                self.toggleOnce(4) { await $0.toggleMeeting(announce: true) }; return nil
             }
             guard event.window === self.panel else { return event }
             if event.type == .keyDown, event.keyCode == 53, self.panel.attachedSheet == nil {
@@ -126,6 +143,13 @@ final class MemoryOverlayController {
         if previousApplication?.activate(options: []) != true {
             NSApp.hide(nil)
         }
+    }
+
+    private func toggleOnce(_ shortcut: UInt32, _ action: @escaping (AppModel) async -> Void) {
+        if let last = lastToggle[shortcut], Date().timeIntervalSince(last) < 0.4 { return }
+        lastToggle[shortcut] = Date()
+        let model = model
+        Task { await action(model) }
     }
 
     private func handleEscape() {

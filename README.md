@@ -64,10 +64,11 @@ downloaded-installation test on every supported macOS version.
 | Timeline | Full-screen overlay, app icons and icon-derived colors, calendar, compressed recording gaps, 30-second navigation |
 | Search | Local keyword search that also matches Korean words with particles, AI query planning, source-linked answers, follow-up questions, saved conversations |
 | Meetings | Explicit microphone recording, optional system audio, post-recording transcription with Apple's models or Whisper on your Mac, or OpenAI's newest models with a ChatGPT plan or API key, on-device speaker labels you can rename, automatic summaries with decisions and action items, inline playback and timestamp seeking |
+| Live captions | Captions over every app and full-screen video for what the Mac plays or the microphone, translated as they are spoken, by OpenAI with a ChatGPT plan or API key or on this Mac with Apple's speech and translation models on macOS 26; text size, color, background, lines and position |
 | AI providers | Claude, Codex, Gemini, Grok, Cursor and OpenCode (free models) through their CLIs; Apple's on-device model and Ollama on your Mac; install and sign-in from Settings, model, thinking-level and Fast mode controls in search, a context window choice for Claude and Grok, and reported token and context use |
 | MCP | Opt-in read-only memory search for Claude Desktop, Claude Code, Codex, Cursor and compatible local clients |
 | Appearance | System/custom accent, system/manual light and dark modes, text size, transitions and optional edge glow |
-| Controls | Editable global shortcuts for the memory overlay and for search alone, Dock/menu bar placement, launch options, pause reminders, exclusions and retention |
+| Controls | Editable global shortcuts for the memory overlay, search alone, live captions and meeting recording, Dock/menu bar placement, launch options, pause reminders, exclusions and retention |
 | Updates | Sparkle checks a signed feed and downloads signed archives from GitHub Releases |
 
 The default shortcut is **Command + Shift + Space**. It opens focused search in
@@ -120,7 +121,7 @@ timeouts and bounded output. Unsupported CLI contracts fail closed. These contro
 reduce agent side effects; they are not a guarantee that a third-party executable
 is trustworthy. Remaining subscription quota is shown as unknown when unavailable. Private Cloud
 Compute is not available to third-party apps. An OpenAI API key can be used for
-transcription; search and summaries do not take API keys yet. See [provider contracts](docs/PROVIDERS.md).
+transcription and live captions; search and summaries do not take API keys yet. See [provider contracts](docs/PROVIDERS.md).
 
 ## MCP Connections
 
@@ -177,6 +178,17 @@ On macOS 26 and later, speech models download when a language is chosen. Failure
 and the original audio is preserved. A recording can last at most four hours.
 Title-based privacy and meeting detection are best-effort, not complete protection.
 Review [data flow and limitations](docs/PRIVACY.md) before recording sensitive work.
+
+Live captions listen to what the Mac plays, or to the microphone, and show captions over
+every app, also full-screen video. Turn them on from the Reprise menu in the menu bar or
+with a shortcut set in **Settings > General > Shortcuts**, and choose **Move Captions** to
+drag them into place. In **Settings > Live Captions**, choose the caption language and who
+makes the captions. OpenAI's live translation recognizes the spoken language by itself,
+writes 57 languages and runs with the ChatGPT plan of the Codex CLI or an OpenAI API key.
+On macOS 26, this Mac captions with Apple's speech recognition and translation once the
+spoken language is chosen, without sending audio anywhere; Settings shows which languages
+this Mac can recognize and translate. Automatic uses OpenAI when its account works and this
+Mac otherwise. Captions are shown, not saved.
 
 ## Updates
 

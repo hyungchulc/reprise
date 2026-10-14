@@ -197,9 +197,9 @@ private final class AudioCompletionResult<Value>: @unchecked Sendable {
     }
 }
 
-private typealias AudioCompletion = AudioThrowingCompletion<Void>
+typealias AudioCompletion = AudioThrowingCompletion<Void>
 
-private final class AudioThrowingCompletion<Value>: @unchecked Sendable {
+final class AudioThrowingCompletion<Value>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Value, Error>?
     init(_ continuation: CheckedContinuation<Value, Error>) { self.continuation = continuation }

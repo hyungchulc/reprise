@@ -6,13 +6,13 @@ import RepriseCore
 
 private enum SettingsPage: String, CaseIterable, Identifiable {
     case general = "General", appearance = "Appearance", screen = "Screen Recording", audio = "Audio & Meetings"
-    case privacy = "Privacy", models = "AI & Models", storage = "Storage", usage = "Usage & Performance"
+    case captions = "Live Captions", privacy = "Privacy", models = "AI & Models", storage = "Storage", usage = "Usage & Performance"
     case mcp = "MCP & Integrations"
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .general: "gearshape"; case .appearance: "paintpalette"; case .screen: "record.circle"
-        case .audio: "waveform"; case .privacy: "hand.raised"; case .models: "sparkles"
+        case .audio: "waveform"; case .captions: "captions.bubble"; case .privacy: "hand.raised"; case .models: "sparkles"
         case .storage: "internaldrive"; case .usage: "chart.bar"
         case .mcp: "puzzlepiece.extension"
         }
@@ -49,6 +49,7 @@ struct SettingsView: View {
                     case .appearance: AppearanceSettings(model: model)
                     case .screen: screen
                     case .audio: audio
+                    case .captions: CaptionSettings(model: model, captions: model.captions)
                     case .privacy: privacy
                     case .models: AISettings(model: model)
                     case .storage: storage
@@ -84,11 +85,15 @@ struct SettingsView: View {
                 } catch { loginError = error.localizedDescription; launchAtLogin = SMAppService.mainApp.status == .enabled }
             }
             if let loginError { Text(loginError).foregroundStyle(.secondary).repriseFont(.caption) }
+            Button("Review Setup", systemImage: "checklist") { dismiss(); model.showOnboarding = true }
+        }
+        Section("Shortcuts") {
             ShortcutSettings(shortcut: model.shortcut)
             ShortcutSettings(shortcut: model.searchOnlyShortcut, title: "Search Only")
-            Text("Opens just the search box, without the memory view behind it. Opening a memory from it shows the full view.")
+            ShortcutSettings(shortcut: model.captionsShortcut, title: "Live Captions")
+            ShortcutSettings(shortcut: model.meetingShortcut, title: "Record Meeting")
+            Text("These work in every app, also over full-screen video. Search Only opens just the search box; opening a memory from it shows the full view. Live Captions and Record Meeting turn on with one press and off with the next.")
                 .foregroundStyle(.secondary).repriseFont(.caption)
-            Button("Review Setup", systemImage: "checklist") { dismiss(); model.showOnboarding = true }
         }
         Section("Reprise") {
             LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Development")
