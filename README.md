@@ -64,7 +64,7 @@ downloaded-installation test on every supported macOS version.
 | Timeline | Full-screen overlay, app icons and icon-derived colors, calendar, compressed recording gaps, 30-second navigation |
 | Search | Local keyword search that also matches Korean words with particles, AI query planning, source-linked answers, follow-up questions, saved conversations |
 | Meetings | Explicit microphone recording, optional system audio, post-recording on-device transcription in up to five languages at once, automatic summaries with decisions and action items, inline playback and timestamp seeking |
-| AI providers | Claude, Codex, Gemini, Grok, Cursor and OpenCode (free models) through their CLIs; Apple's on-device model and Ollama on your Mac; install and sign-in from Settings, model, thinking-level and Fast mode controls in search, and reported token and context use |
+| AI providers | Claude, Codex, Gemini, Grok, Cursor and OpenCode (free models) through their CLIs; Apple's on-device model and Ollama on your Mac; install and sign-in from Settings, model, thinking-level and Fast mode controls in search, a context window choice for Claude and Grok, and reported token and context use |
 | MCP | Opt-in read-only memory search for Claude Desktop, Claude Code, Codex, Cursor and compatible local clients |
 | Appearance | System/custom accent, system/manual light and dark modes, text size, transitions and optional edge glow |
 | Controls | Editable global shortcuts for the memory overlay and for search alone, Dock/menu bar placement, launch options, pause reminders, exclusions and retention |
@@ -76,8 +76,10 @@ search still answering is kept), then closes the overlay. Time words such as tod
 yesterday evening, last week or 10월 13일 show that time, spread across it; other
 words search the text inside it.
 Recent conversations restore saved answers and citations without another AI call.
-A recording chosen in search opens in its panel above the bottom bar, which stays in
-view while searching, and recordings have a waveform timeline lane. An optional
+Moving through the timeline steps through screens. Recordings sit on a waveform lane
+under it and open in a panel above the bottom bar only when chosen: from the lane, at
+the moment clicked, from search results or from a citation. The panel stays open while
+the timeline is within the recording and stays in view while searching. An optional
 **Search Only** shortcut, set in Settings > General, opens just the search box with no
 memory view behind it.
 

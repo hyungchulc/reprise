@@ -73,20 +73,25 @@ struct MemoryTimeRail: View {
                     let left = max(0, x - 14)
                     let right = min(geometry.size.width, max(x + 14, end))
                     if right > left {
-                        Button {
-                            onOpenRecording(segment.id)
-                            Task { await model.openCitation(segment.id) }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "waveform").font(.system(size: 12, weight: .semibold))
-                                if right - left > 100 { Text(segment.appName).repriseFont(.caption).lineLimit(1) }
-                            }.frame(width: right - left, height: 22)
-                                .foregroundStyle(Color.accentColor)
-                                .background(Color.accentColor.opacity(model.selection?.id == segment.id ? 0.25 : 0.13), in: RoundedRectangle(cornerRadius: 5))
-                                .overlay { RoundedRectangle(cornerRadius: 5).stroke(Color.accentColor.opacity(0.7), lineWidth: 1) }
-                        }.buttonStyle(.plain).position(x: (left + right) / 2, y: 53)
-                            .help("Recording: \(segment.start.formatted(date: .abbreviated, time: .shortened))")
+                        // A recording spans its whole time; the point clicked is where playback starts.
+                        HStack(spacing: 4) {
+                            Image(systemName: "waveform").font(.system(size: 12, weight: .semibold))
+                            if right - left > 100 { Text(segment.appName).repriseFont(.caption).lineLimit(1) }
+                        }.frame(width: right - left, height: 22)
+                            .foregroundStyle(Color.accentColor)
+                            .background(Color.accentColor.opacity(model.openRecording?.id == segment.id ? 0.25 : 0.13), in: RoundedRectangle(cornerRadius: 5))
+                            .overlay { RoundedRectangle(cornerRadius: 5).stroke(Color.accentColor.opacity(0.7), lineWidth: 1) }
+                            .contentShape(Rectangle())
+                            .onTapGesture(coordinateSpace: .local) { location in
+                                let position = axis.position(of: referenceDate) + Double(left + location.x - geometry.size.width / 2) * secondsPerPoint
+                                onOpenRecording(segment.id)
+                                Task { await model.openRecording(id: segment.id, at: axis.date(at: position)) }
+                            }
+                            .position(x: (left + right) / 2, y: 53)
+                            .help("Recording: \(segment.start.formatted(date: .abbreviated, time: .shortened)) to \(segment.end.formatted(date: .omitted, time: .shortened))")
+                            .accessibilityElement(children: .ignore).accessibilityAddTraits(.isButton)
                             .accessibilityLabel("Open timeline recording at \(segment.start.formatted(date: .abbreviated, time: .shortened))")
+                            .accessibilityAction { onOpenRecording(segment.id); Task { await model.openRecording(id: segment.id) } }
                     }
                 }
                 Rectangle().fill(Color.white.opacity(0.95)).frame(width: 2)

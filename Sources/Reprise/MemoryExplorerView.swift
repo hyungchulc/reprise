@@ -16,6 +16,7 @@ struct MemoryExplorerView: View {
     @State private var zoom: Double = 1
     @State private var playing = false
     @State private var deleteConfirmation = false
+    @State private var deleteRecordingConfirmation = false
     @State private var searchFocused = false
     @StateObject private var audio = MemoryAudioPlayer()
     @State private var transcriptExpanded = true
@@ -92,23 +93,36 @@ struct MemoryExplorerView: View {
         .confirmationDialog("Delete this memory and its local media?", isPresented: $deleteConfirmation) {
             Button("Delete Memory", role: .destructive) { Task { await model.deleteSelected() } }
         }
+        .confirmationDialog("Delete this recording, its transcript and its audio?", isPresented: $deleteRecordingConfirmation) {
+            Button("Delete Recording", role: .destructive) { audio.unload(); Task { await model.deleteRecording() } }
+        }
         .onChange(of: model.selection?.id) { _, _ in
-            pan = .zero; transcriptExpanded = true; showText = false
-            if model.selection?.kind == "meeting" { playing = false }
+            pan = .zero; showText = false
+        }
+        .onChange(of: model.openRecording?.id) { _, id in
+            if id != nil { transcriptExpanded = true; playing = false }
+        }
+        // Choosing another point of the open recording moves playback there.
+        .onChange(of: model.recordingOffset) { _, offset in
+            guard let offset, audio.canPlay else { return }
+            audio.seek(to: offset); model.recordingOffset = nil
         }
         .onChange(of: searchExpanded) { _, expanded in
             if !expanded { searchFocused = false }
             // Minimizing or Escape closes the search box when nothing else is showing.
             if !expanded, model.searchOnly { NotificationCenter.default.post(name: .repriseCloseMemory, object: nil) }
         }
-        .task(id: model.selection?.id) { await audio.load(moment: model.selection, root: model.root, cipher: model.cipher) }
+        .task(id: model.openRecording?.id) {
+            await audio.load(moment: model.openRecording, root: model.root, cipher: model.cipher)
+            if let offset = model.recordingOffset { audio.seek(to: offset); model.recordingOffset = nil }
+        }
         .onDisappear { audio.unload() }
         .onReceive(NotificationCenter.default.publisher(for: .repriseFocusSearch)) { _ in
             searchExpanded = true
             searchFocused = true
         }
         .onReceive(model.meeting.$transcribingMomentID.compactMap { $0 }) { id in
-            if model.selection?.id == id { transcriptExpanded = true }
+            if model.openRecording?.id == id { transcriptExpanded = true }
         }
         .onReceive(NotificationCenter.default.publisher(for: .repriseOverlayHidden)) { _ in
             openingGlow = false
@@ -157,14 +171,15 @@ struct MemoryExplorerView: View {
         }
         VStack(spacing: 0) {
             Spacer(minLength: 0)
-            // The recording stays in view above the bar while search is open, too.
-            if let moment = model.selection, moment.kind == "meeting" {
+            // The open recording stays in view above the bar while search is open, too.
+            if let moment = model.openRecording {
                 MemoryAudioPanel(moment: moment, audio: audio, recorder: model.meeting, transcriptExpanded: $transcriptExpanded,
                                  transcriptHeight: min(240, max(80, geometry.size.height - 450)),
                                  summary: model.summaries[moment.id], summarizing: model.summarizing.contains(moment.id),
                                  summaryError: model.summaryErrors[moment.id], providerName: model.provider.provider.displayName,
                                  onSummarize: { Task { await model.summarize(moment) } },
-                                 onTranscribe: { Task { await model.transcribeSelected() } })
+                                 onTranscribe: { Task { await model.transcribeRecording() } },
+                                 onDelete: { deleteRecordingConfirmation = true }, onClose: { audio.pause(); model.closeRecording() })
                     .frame(width: min(780, geometry.size.width - 48))
                     .excludesMemoryScrolling().padding(.bottom, 12)
             }
@@ -249,7 +264,7 @@ struct MemoryExplorerView: View {
                             Text(model.response == nil ? matchCountLabel : "\(model.displayedMatches.count) supporting memories").repriseFont(.caption).foregroundStyle(.secondary)
                             ForEach(model.displayedMatches.filter { $0.kind == "meeting" }) { moment in
                                 // The chosen recording opens in the panel above the bottom bar.
-                                let open = model.selection?.id == moment.id
+                                let open = model.openRecording?.id == moment.id
                                 Button {
                                     transcriptExpanded = true; searchFocused = false
                                     Task { await model.openMatch(moment) }
@@ -307,7 +322,7 @@ struct MemoryExplorerView: View {
                     Button("All Apps") { model.appFilter = nil }
                     ForEach(model.stats.apps, id: \.self) { app in Button(app) { model.appFilter = app } }
                 } label: { Label(model.appFilter ?? "Apps", systemImage: "app.dashed") }.fixedSize()
-                Toggle(isOn: Binding(get: { model.mode == "meetings" }, set: { model.mode = $0 ? "meetings" : "all" })) { Label("Audio", systemImage: "waveform") }.toggleStyle(.button)
+                Toggle(isOn: Binding(get: { model.mode == "meetings" }, set: { model.mode = $0 ? "meetings" : "all" })) { Label("Audio", systemImage: "waveform") }.toggleStyle(.button).fixedSize()
                 Spacer()
                 Menu {
                     Picker("Provider", selection: Binding(get: { model.provider.provider }, set: { model.selectProvider($0) })) {
@@ -376,7 +391,7 @@ struct MemoryExplorerView: View {
                     guard url.scheme == "reprise", let citation = turn.response.citations.first(where: { $0.momentID == url.lastPathComponent }) else { return .discarded }
                     Task {
                         await model.openCitation(citation.momentID)
-                        if model.selection?.kind == "meeting" { transcriptExpanded = true }
+                        if model.openRecording?.id == citation.momentID { transcriptExpanded = true }
                     }
                     return .handled
                 })
@@ -402,7 +417,7 @@ struct MemoryExplorerView: View {
             HStack(spacing: 8) {
                 HStack(spacing: 8) {
                     Button { model.skip(1) } label: { Image(systemName: "backward.end").frame(width: 26, height: 32) }.help("Back 30 seconds")
-                    Button { playing.toggle() } label: { Image(systemName: playing ? "pause.fill" : "play.fill").frame(width: 26, height: 32) }.help("Play memories").disabled(model.selection?.kind == "meeting")
+                    Button { playing.toggle() } label: { Image(systemName: playing ? "pause.fill" : "play.fill").frame(width: 26, height: 32) }.help("Play memories")
                     Button { model.skip(-1) } label: { Image(systemName: "forward.end").frame(width: 26, height: 32) }.help("Forward 30 seconds")
                 }.padding(.horizontal, 12).padding(.vertical, 4).modifier(GlassSurface())
                 Spacer()
@@ -412,11 +427,8 @@ struct MemoryExplorerView: View {
                             .help("Open \(BrowserAddress.short(address))").accessibilityLabel("Open page \(BrowserAddress.short(address))")
                     }
                     Button { searchExpanded.toggle(); searchFocused = searchExpanded } label: { Image(systemName: "magnifyingglass") }.help("Search memory")
-                    Button {
-                        if model.selection?.kind == "meeting" { searchExpanded = false; transcriptExpanded.toggle() }
-                        else { showText.toggle() }
-                    } label: { Image(systemName: model.selection?.kind == "meeting" ? "text.bubble" : "text.viewfinder") }
-                        .help(model.selection?.kind == "meeting" ? "Transcript" : "Select screen text")
+                    Button { showText.toggle() } label: { Image(systemName: "text.viewfinder") }
+                        .help("Select screen text")
                     Button { zoom = zoom == 1 ? 1.5 : 1; pan = .zero } label: { Image(systemName: zoom == 1 ? "plus.magnifyingglass" : "minus.magnifyingglass") }.help("Zoom memory")
                     Button { Task { model.search = ""; model.dayFilter = nil; model.appFilter = nil; await model.reload() } } label: { Image(systemName: "arrow.right.to.line") }.help("Latest memory")
                 }.padding(.horizontal, 16).padding(.vertical, 12).modifier(GlassSurface())

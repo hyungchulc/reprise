@@ -91,7 +91,11 @@ provider, disabled web search and disabled capability features (shell, apps,
 plugins, hooks, browser, computer, images, memory, subagents and code mode).
 It also uses the documented `model_catalog_json` setting from the
 [configuration schema](https://developers.openai.com/codex/config-schema.json).
-A temporary copy of the existing noncredential model catalog sets shell type
+The catalog is the one Codex itself works from: the file named by the top-level
+`model_catalog_json` key of `~/.codex/config.toml` when there is one (Reprise reads only
+that key), else `~/.codex/models_cache.json`. Models under a provider prefix such as
+`cursor/` are served by a proxy that `--ignore-user-config` leaves out, so they are skipped.
+A temporary copy of that noncredential model catalog sets shell type
 to disabled, patch tool to null, catalog tools to an empty array, direct tool
 mode and disabled multi-agent mode. This closes tools advertised by model
 metadata even when their feature flags are off. The native CLI's model-free
@@ -308,9 +312,29 @@ served model is preferred; otherwise the requested alias or `auto` is recorded.
 Each answer also keeps the tokens its request sent, cached prompt tokens included, and
 the model's context window where one is known: Claude reports it with the result,
 Codex's model catalog and Reprise's own copy of OpenCode's catalog list it, and Ollama
-runs with the 12,288-token window Reprise asks for. Grok keeps the window only in a
-cache file beside account details, which Reprise does not read, and Gemini and Cursor
-do not report one, so those answers show the token count alone.
+runs with the 12,288-token window Reprise asks for. Grok downloads its model catalog
+into the private `GROK_HOME` of each request; Reprise takes only each model's
+`context_window` from that copy before the folder is removed. The catalog names the
+model asked for (`grok-4.7-build-fast`) while the result names the served one
+(`grok-4.7-build`), so a served model the catalog does not name takes the window its
+related or all listed models share. Gemini and Cursor report no window, so those
+answers show the token count alone.
+
+Settings offers a context window when the CLI has more than one for the model.
+Claude's Opus 4.7 and later, Sonnet 5 and later, Haiku 5.5 and Fable models run with a
+1M window, so its aliases and default model do too. 500K runs the CLI with
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000`, the window Claude Code works within before it
+compacts; the model itself still reports 1M, and the ring measures against 500K. Older
+models reach 1M only through `[1m]` variants, some billed to usage credits, so they get
+no choice. Codex runs with the window its own catalog sets and offers no choice. Grok's cached model list,
+`~/.grok/models_cache.json`, gives `context_windows` (256K and 500K); Reprise reads
+only the window fields of that file, never its account fields or `auth.json`. Grok
+applies a window from its config only to a model named with `--model`, so a chosen
+window is written into the private `config.toml` as `[model."<id>"] context_window = N`
+and choosing a window also names the model, Grok's default included. A window that the model does
+not list is ignored. Reprise's requests stay a few thousand tokens and it never
+compacts a conversation, so the choice mostly changes the ring's scale; it also moves
+the point at which the CLI itself would compact.
 
 ## Process bounds and verification
 

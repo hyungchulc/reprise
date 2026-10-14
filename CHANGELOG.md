@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.8.2-alpha.2
+
+- **The search bar fits again.** Fast mode is a bolt button beside the thinking level,
+  so the Audio switch keeps its full width.
+- **Recordings open only when you choose them.** Moving through the timeline steps
+  through screens alone. A recording opens from its lane under the timeline, at the
+  moment you click, from search results or from a citation, and stays open while the
+  timeline is anywhere within the recording, not just at its start. The recording panel
+  has close and delete buttons.
+- **Context window choice.** Settings > AI & Models offers the windows the provider's
+  CLI has for the model: Claude 1M or 500K on its latest models, Grok 256K or 500K.
+  Claude Code works within 500K and compacts at its edge while the model keeps 1M. Grok
+  applies a window only to a model named on its command line, so choosing one while
+  Grok's default model is in use names that model. Codex keeps the window its own model
+  catalog sets.
+- **Codex follows the catalog it uses.** When Codex's own config names a model catalog
+  with `model_catalog_json`, Reprise lists models, thinking levels, Fast mode and context
+  windows from that file, as Codex does, instead of from Codex's download cache. Models a
+  proxy serves under a provider prefix, such as `cursor/...`, are left out, because
+  Reprise runs Codex against OpenAI directly.
+- **Grok shows its context window.** Grok answers show the ring too, 256K by default.
+  Reprise reads the window from the model list the Grok CLI downloads for each request,
+  and the choices in Settings from the CLI's cached copy of that list, taking only the
+  window fields.
+
 ## 0.8.2-alpha.1
 
 - **Fast mode.** A Fast switch next to the thinking level, and in Settings, for models

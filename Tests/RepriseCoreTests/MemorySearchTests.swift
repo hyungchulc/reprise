@@ -106,7 +106,8 @@ final class MemorySearchTests: XCTestCase {
             }
             let configuration = AIProviderConfiguration(provider: kind, model: environment["REPRISE_VERIFY_MODEL"] ?? "",
                                                         reasoningEffort: environment["REPRISE_VERIFY_EFFORT"],
-                                                        fast: environment["REPRISE_VERIFY_FAST"] == "1" ? true : nil)
+                                                        fast: environment["REPRISE_VERIFY_FAST"] == "1" ? true : nil,
+                                                        contextWindow: Int(environment["REPRISE_VERIFY_WINDOW"] ?? ""))
             let result = try await MemorySearch(store: store, client: AIClient()).search(question: question, configuration: configuration)
             print("ANSWER", result.response.text)
             print("CONTEXT", result.response.context.map { "\($0.tokens) of \($0.window.map(String.init) ?? "unknown")" } ?? "none")

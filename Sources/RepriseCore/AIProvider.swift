@@ -52,11 +52,13 @@ public struct AIProviderConfiguration: Codable, Equatable, Sendable {
     /// Fast mode for providers that take it as a setting (Claude, Codex). Grok and Cursor name it
     /// in the model instead. It uses plan limits faster, and Claude's draws on usage credits.
     public var fast: Bool?
+    /// A context window the CLI offers for the model besides its default (Claude, Grok); nil keeps the default.
+    public var contextWindow: Int?
     public init(provider: AIProviderKind = .claude, model: String = "", executablePath: String? = nil, timeoutSeconds: Double = 90,
-                reasoningEffort: String? = nil, fast: Bool? = nil) {
+                reasoningEffort: String? = nil, fast: Bool? = nil, contextWindow: Int? = nil) {
         self.provider = provider; self.model = model
         self.executablePath = executablePath; self.timeoutSeconds = timeoutSeconds
-        self.reasoningEffort = reasoningEffort; self.fast = fast
+        self.reasoningEffort = reasoningEffort; self.fast = fast; self.contextWindow = contextWindow
     }
 
     /// The level sent to the CLI: the chosen one when the model takes it, otherwise high, or the
@@ -70,6 +72,14 @@ public struct AIProviderConfiguration: Codable, Equatable, Sendable {
 
     /// Fast mode as a setting, only for a model that has it: Claude would otherwise switch models.
     var fastSetting: Bool { fast == true && provider.fastSettingNote(model: model) != nil }
+
+    /// The chosen window when the model offers it. Grok applies a window only to a model named on
+    /// its command line, so a blank Grok model keeps the default.
+    var chosenContextWindow: Int? {
+        guard let contextWindow, provider != .grok || !model.isEmpty,
+              provider.contextWindows(model: model)?.options.contains(contextWindow) == true else { return nil }
+        return contextWindow
+    }
 }
 
 public extension AIProviderKind {
@@ -86,6 +96,24 @@ public extension AIProviderKind {
             guard let tier = CodexAnswerCatalog.fastTier(model: model) else { return nil }
             let note = tier.note.isEmpty ? "Faster answers" : tier.note.prefix(1).uppercased() + tier.note.dropFirst()
             return "\(note). Fast mode uses your ChatGPT plan's limits faster."
+        default: return nil
+        }
+    }
+
+    /// The context windows the CLI lets the person choose for a model, and the one it uses by default.
+    /// Grok lists both of its sizes; Claude's latest models run with 1M, or within 500K of it. Codex
+    /// keeps the window its own catalog sets.
+    func contextWindows(model: String) -> (standard: Int, options: [Int])? {
+        switch self {
+        case .claude:
+            // Opus 4.7 and later, Sonnet 5 and later, Haiku 5.5 and Fable run with a 1M window; Claude
+            // Code can work within 500K of it instead. The aliases and the CLI's default name these models.
+            let id = model.lowercased()
+            guard !id.contains("["), ["", "fable", "opus", "sonnet", "haiku"].contains(id)
+                || ["claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-5", "claude-haiku-5-5", "claude-fable-5"].contains(where: id.hasPrefix)
+            else { return nil }
+            return (1_000_000, [500_000, 1_000_000])
+        case .grok: return AICommand.grokCatalogWindows(model: model)
         default: return nil
         }
     }
@@ -254,7 +282,11 @@ public actor AIClient {
         let output = try await AIProcessRunner.run(executable: executable,
             arguments: AICommand.arguments(configuration: configuration, schema: schema, systemPrompt: systemPrompt),
             input: try AICommand.stdin(provider: configuration.provider, input: input, schema: schema, systemPrompt: systemPrompt),
-            timeout: min(180, max(5, configuration.timeoutSeconds)), provider: configuration.provider, schema: schema)
+            timeout: min(180, max(5, configuration.timeoutSeconds)), provider: configuration.provider, schema: schema,
+            // Claude Code works within this window and compacts at its edge; the model keeps 1M.
+            environment: configuration.provider == .claude
+                ? configuration.chosenContextWindow.flatMap { $0 < 1_000_000 ? ["CLAUDE_CODE_AUTO_COMPACT_WINDOW": String($0)] : nil } ?? [:] : [:],
+            grokWindow: configuration.provider == .grok ? configuration.chosenContextWindow.map { (configuration.model, $0) } : nil)
         guard output.exitCode == 0 else {
             if [.gemini, .cursor, .opencode].contains(configuration.provider) {
                 // These CLIs report sign-in and quota failures in their event stream.
@@ -266,13 +298,16 @@ public actor AIClient {
         }
         var result = try AIResponseParser.structured(output.stdout, provider: configuration.provider,
                                                      requestedModel: configuration.model, duration: Date().timeIntervalSince(start))
-        // Codex and OpenCode report tokens but not the window; their model catalogs list it.
-        if let context = result.context, context.window == nil {
-            let window: Int? = switch configuration.provider {
+        // A chosen window is the one the CLI ran with. Codex, OpenCode and Grok report tokens but
+        // not the window; their model catalogs list it.
+        if let context = result.context, let window: Int = configuration.chosenContextWindow ?? context.window ?? {
+            switch configuration.provider {
             case .codex: CodexAnswerCatalog.contextWindow(model: configuration.model)
             case .opencode: AICommand.openCodeWindow(model: configuration.model.isEmpty ? AICommand.openCodeDefaultModel : configuration.model)
+            case .grok: AICommand.grokWindow(output.contextWindows, requested: configuration.model, served: result.usage.model)
             default: nil
             }
+        }() {
             result.context = AIContextUse(tokens: context.tokens, window: window)
         }
         return result
@@ -461,7 +496,42 @@ enum AICommand {
         return String(data: try! encoder.encode(value), encoding: .utf8)!
     }
 
+    /// Grok's catalog names the model asked for (`grok-4.7-build-fast`), while its result names the
+    /// served one (`grok-4.7-build`). A model the catalog does not name takes the window its related
+    /// or all listed models share.
+    static func grokWindow(_ windows: [String: Int], requested: String, served: String) -> Int? {
+        if let window = windows[requested] ?? windows[served] { return window }
+        for candidates in [windows.filter { $0.key.hasPrefix(served + "-") }, windows] {
+            let shared = Set(candidates.values)
+            if shared.count == 1 { return shared.first }
+        }
+        return nil
+    }
+
+    /// The windows the Grok CLI's own model list offers, read from its cache of that list; nothing
+    /// else in the file is used. A blank model takes the list every model shares.
+    static func grokCatalogWindows(model: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> (standard: Int, options: [Int])? {
+        let url = home.appendingPathComponent(".grok/models_cache.json")
+        guard (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map({ $0 > 0 && $0 <= 1024 * 1024 }) == true,
+              let object = try? JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
+              let models = object["models"] as? [String: Any] else { return nil }
+        func windows(_ value: Any?) -> (standard: Int, options: [Int])? {
+            guard let info = (value as? [String: Any])?["info"] as? [String: Any], let standard = info["context_window"] as? Int, standard > 0 else { return nil }
+            let options = Set((info["context_windows"] as? [Int] ?? []).filter { $0 > 0 } + [standard]).sorted()
+            return options.count > 1 ? (standard, options) : nil
+        }
+        if !model.isEmpty { return windows(models[model]) }
+        let all = models.values.map(windows)
+        guard let first = all.first ?? nil, all.allSatisfy({ $0?.standard == first.standard && $0?.options == first.options }) else { return nil }
+        return first
+    }
+
     static let grokConfig = "[cli]\nauto_update = false\nuse_leader = false\nsession_registry = false\n[features]\ntelemetry = false\n[telemetry]\notel_enabled = false\ntrace_upload = false\n"
+
+    /// Grok reads a model's window from its config, and only for a model named on the command line.
+    static func grokConfig(window: (model: String, tokens: Int)?) -> String {
+        grokConfig + (window.map { "[model.\(tomlString($0.model))]\ncontext_window = \($0.tokens)\n" } ?? "")
+    }
 
     static func grokPrompt(_ data: Data) throws -> Data {
         guard let text = String(data: data, encoding: .utf8) else { throw AIProviderError.invalidInput }
@@ -753,6 +823,8 @@ struct AIProcessOutput: Sendable {
     var stderr = Data()
     let exitCode: Int32
     var subscriptionLogin = false
+    /// Context windows by model from the catalog Grok fetched into Reprise's private home for this run.
+    var contextWindows: [String: Int] = [:]
 }
 
 private final class AICancellation: @unchecked Sendable {
@@ -769,13 +841,13 @@ private func repriseChildPIDs(_ parent: Int32, _ buffer: UnsafeMutableRawPointer
 enum AIProcessRunner {
     static func run(executable: URL, arguments: [String], input: Data, timeout: Double,
                     outputLimit: Int = 2 * 1024 * 1024, provider: AIProviderKind? = nil,
-                    schema: String? = nil, environment: [String: String] = [:]) async throws -> AIProcessOutput {
+                    schema: String? = nil, environment: [String: String] = [:], grokWindow: (model: String, tokens: Int)? = nil) async throws -> AIProcessOutput {
         let cancellation = AICancellation()
         return try await withTaskCancellationHandler(operation: {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
-                    do { continuation.resume(returning: try execute(executable, arguments, input, timeout, outputLimit, cancellation, provider, schema, environment)) }
+                    do { continuation.resume(returning: try execute(executable, arguments, input, timeout, outputLimit, cancellation, provider, schema, environment, grokWindow)) }
                     catch { continuation.resume(throwing: error) }
                 }
             }
@@ -784,7 +856,8 @@ enum AIProcessRunner {
 
     private static func execute(_ executable: URL, _ arguments: [String], _ input: Data, _ timeout: Double,
                                 _ outputLimit: Int, _ cancellation: AICancellation,
-                                _ provider: AIProviderKind?, _ schema: String?, _ environment: [String: String]) throws -> AIProcessOutput {
+                                _ provider: AIProviderKind?, _ schema: String?, _ environment: [String: String],
+                                _ grokWindow: (model: String, tokens: Int)?) throws -> AIProcessOutput {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent("reprise-ai-\(UUID().uuidString)", isDirectory: true).resolvingSymlinksInPath()
         try fm.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -812,7 +885,7 @@ enum AIProcessRunner {
             try fm.createDirectory(at: home, withIntermediateDirectories: true)
             let prompt = root.appendingPathComponent("prompt.json")
             try AICommand.grokPrompt(input).write(to: prompt, options: .atomic)
-            try Data(AICommand.grokConfig.utf8)
+            try Data(AICommand.grokConfig(window: grokWindow).utf8)
                 .write(to: home.appendingPathComponent("config.toml"), options: .atomic)
             guard AIProcessSandbox.isAvailable else { throw AIProviderError.unsupportedIsolation }
             process.executableURL = AIProcessSandbox.executable
@@ -958,7 +1031,20 @@ enum AIProcessRunner {
         if let failure { throw failure }
         let subscriptionLogin = arguments == ["login", "status"] && process.terminationStatus == 0 &&
             String(decoding: collected + errorOutput, as: UTF8.self).lowercased().contains("logged in using chatgpt")
-        return AIProcessOutput(stdout: collected, stderr: errorOutput, exitCode: process.terminationStatus, subscriptionLogin: subscriptionLogin)
+        var output = AIProcessOutput(stdout: collected, stderr: errorOutput, exitCode: process.terminationStatus, subscriptionLogin: subscriptionLogin)
+        if provider == .grok { output.contextWindows = grokWindows(root.appendingPathComponent("grok/models_cache.json")) }
+        return output
+    }
+
+    /// Grok writes its model catalog into the private home; only each model's window is taken from it.
+    static func grokWindows(_ url: URL) -> [String: Int] {
+        guard (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map({ $0 > 0 && $0 <= 1024 * 1024 }) == true,
+              let object = try? JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
+              let models = object["models"] as? [String: Any] else { return [:] }
+        return models.reduce(into: [:]) { windows, entry in
+            let info = (entry.value as? [String: Any])?["info"] as? [String: Any]
+            if let window = info?["context_window"] as? Int, window > 0 { windows[entry.key] = window }
+        }
     }
 
     private static func descendants(_ parent: Int32, depth: Int = 0) -> Set<Int32> {

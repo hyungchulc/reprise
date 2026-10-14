@@ -14,6 +14,8 @@ struct MemoryAudioPanel: View {
     var providerName = ""
     var onSummarize: () -> Void = {}
     var onTranscribe: () -> Void = {}
+    var onDelete: (() -> Void)?
+    var onClose: (() -> Void)?
     @State private var contentHeight: CGFloat = 44
     @State private var summaryHeight: CGFloat = 44
     @State private var page: Page = .summary
@@ -49,6 +51,13 @@ struct MemoryAudioPanel: View {
                 Button { transcriptExpanded.toggle() } label: {
                     Image(systemName: transcriptExpanded ? "text.bubble.fill" : "text.bubble")
                 }.help(transcriptExpanded ? "Hide transcript" : "Show transcript").accessibilityLabel(transcriptExpanded ? "Hide transcript" : "Show transcript")
+                if let onDelete {
+                    Button(action: onDelete) { Image(systemName: "trash") }.help("Delete recording").accessibilityLabel("Delete recording")
+                        .disabled(recorder.transcribingMomentID == moment.id)
+                }
+                if let onClose {
+                    Button(action: onClose) { Image(systemName: "xmark") }.help("Close recording").accessibilityLabel("Close recording")
+                }
             }.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
 
             if transcriptExpanded {

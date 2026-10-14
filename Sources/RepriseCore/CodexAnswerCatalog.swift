@@ -4,9 +4,8 @@ import Foundation
 enum CodexAnswerCatalog {
   static var isAvailable: Bool { (try? data()) != nil }
 
-  static func model(requested: String) throws -> String {
-    let object = try JSONSerialization.jsonObject(with: data()) as! [String: Any]
-    let models = object["models"] as! [[String: Any]]
+  static func model(requested: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> String {
+    guard let models = models(home: home) else { throw AIProviderError.unsupportedIsolation }
     if !requested.isEmpty {
       guard models.contains(where: { $0["slug"] as? String == requested }) else {
         throw AIProviderError.invalidInput
@@ -23,14 +22,48 @@ enum CodexAnswerCatalog {
     return slug
   }
 
+  /// The models Codex itself works from: the catalog file its config names in `model_catalog_json`,
+  /// else the cache Codex downloads. Only that one path is read from the config. Models a proxy
+  /// serves under a provider prefix, such as "cursor/...", are left out: Reprise runs Codex against
+  /// OpenAI directly.
+  static func models(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [[String: Any]]? {
+    let codex = home.appendingPathComponent(".codex", isDirectory: true)
+    for url in [configuredCatalog(codex: codex, home: home), codex.appendingPathComponent("models_cache.json")].compactMap({ $0 }) {
+      guard (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map({ $0 > 0 && $0 <= 4 * 1024 * 1024 }) == true,
+        let object = try? JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
+        let models = (object["models"] as? [[String: Any]])?.filter({ ($0["slug"] as? String).map { !$0.contains("/") } ?? false }),
+        !models.isEmpty
+      else { continue }
+      return models
+    }
+    return nil
+  }
+
+  /// The top-level `model_catalog_json` path in Codex's config, which comes before its first table.
+  static func configuredCatalog(codex: URL, home: URL) -> URL? {
+    let url = codex.appendingPathComponent("config.toml")
+    guard (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map({ $0 > 0 && $0 <= 1024 * 1024 }) == true,
+      let text = try? String(contentsOf: url, encoding: .utf8)
+    else { return nil }
+    for line in text.split(whereSeparator: \.isNewline) {
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      if trimmed.hasPrefix("[") { return nil }
+      let parts = trimmed.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+      guard parts.count == 2, parts[0] == "model_catalog_json", let quote = parts[1].first, quote == "\"" || quote == "'" else { continue }
+      let rest = parts[1].dropFirst()
+      guard let close = rest.firstIndex(of: quote) else { return nil }
+      let path = String(rest[..<close])
+      // Escapes in a basic string are left unread rather than guessed at.
+      guard !path.isEmpty, quote == "'" || !path.contains("\\") else { return nil }
+      if path.hasPrefix("~/") { return home.appendingPathComponent(String(path.dropFirst(2))) }
+      return path.hasPrefix("/") ? URL(fileURLWithPath: path) : codex.appendingPathComponent(path)
+    }
+    return nil
+  }
+
   /// The catalog entry for a model; a blank model means the catalog's default.
   static func entry(model: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [String: Any]? {
-    let url = home.appendingPathComponent(".codex/models_cache.json")
-    guard (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map({ $0 > 0 && $0 <= 4 * 1024 * 1024 }) == true,
-      let cache = try? JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
-      let models = cache["models"] as? [[String: Any]],
-      let slug = model.isEmpty ? try? self.model(requested: "") : model
-    else { return nil }
+    guard let models = models(home: home), let slug = model.isEmpty ? try? self.model(requested: "", home: home) : model else { return nil }
     return models.first(where: { $0["slug"] as? String == slug })
   }
 
@@ -58,14 +91,7 @@ enum CodexAnswerCatalog {
   }
 
   static func data(home: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> Data {
-    let url = home.appendingPathComponent(".codex/models_cache.json")
-    let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-    guard size > 0, size <= 4 * 1024 * 1024,
-      let cache = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
-      let models = cache["models"] as? [[String: Any]], !models.isEmpty
-    else {
-      throw AIProviderError.unsupportedIsolation
-    }
+    guard let models = models(home: home) else { throw AIProviderError.unsupportedIsolation }
     let isolated = models.map { model -> [String: Any] in
       var model = model
       model["shell_type"] = "disabled"

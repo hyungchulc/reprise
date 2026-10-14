@@ -560,12 +560,13 @@ public actor MomentStore {
         return try step(statement) ? readMoment(statement) : nil
     }
 
-    /// Returns the closest captured instant, preferring the earlier moment when distances tie.
+    /// Returns the closest captured screen, preferring the earlier one when distances tie. Timeline
+    /// navigation moves through screens; recordings sit on their own lane and open only when chosen.
     public func nearest(to date: Date) throws -> Moment? {
         try refreshCacheVersion()
         var nearest: Moment?
         for (comparison, order) in [("<=", "DESC"), (">", "ASC")] {
-            let statement = try prepare("SELECT \(Self.columns) FROM moments WHERE timestamp\(comparison)? ORDER BY timestamp \(order),id \(order) LIMIT 1")
+            let statement = try prepare("SELECT \(Self.columns) FROM moments WHERE timestamp\(comparison)? AND kind<>'meeting' ORDER BY timestamp \(order),id \(order) LIMIT 1")
             defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }
             try bind([.real(date.timeIntervalSince1970)], to: statement)
             guard try step(statement) else { continue }
@@ -580,18 +581,18 @@ public actor MomentStore {
     public func adjacent(to moment: Moment, earlier: Bool) throws -> Moment? {
         let op = earlier ? "<" : ">"
         let order = earlier ? "DESC" : "ASC"
-        let statement = try prepare("SELECT \(Self.columns) FROM moments WHERE (timestamp,id)\(op)(?,?) ORDER BY timestamp \(order),id \(order) LIMIT 1")
+        let statement = try prepare("SELECT \(Self.columns) FROM moments WHERE (timestamp,id)\(op)(?,?) AND kind<>'meeting' ORDER BY timestamp \(order),id \(order) LIMIT 1")
         defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }
         try bind([.real(moment.timestamp.timeIntervalSince1970), .text(moment.id)], to: statement)
         return try step(statement) ? readMoment(statement) : nil
     }
 
-    /// A contiguous, bounded window on both sides, including across recording gaps.
+    /// A contiguous, bounded window of screens on both sides, including across recording gaps.
     public func timeline(around date: Date, countPerSide: Int = 120) throws -> [Moment] {
         try refreshCacheVersion()
         var rows: [Moment] = []
         for (comparison, order) in [("<=", "DESC"), (">", "ASC")] {
-            let statement = try prepare("SELECT \(Self.columns) FROM moments WHERE timestamp\(comparison)? ORDER BY timestamp \(order),id \(order) LIMIT ?")
+            let statement = try prepare("SELECT \(Self.columns) FROM moments WHERE timestamp\(comparison)? AND kind<>'meeting' ORDER BY timestamp \(order),id \(order) LIMIT ?")
             defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }
             try bind([.real(date.timeIntervalSince1970), .integer(Int64(max(1, min(500, countPerSide))))], to: statement)
             while try step(statement) { rows.append(readMoment(statement)) }
@@ -1056,6 +1057,7 @@ public actor MomentStore {
         if let until = query.until { conditions.append("\(prefix)timestamp<=?"); values.append(.real(until.timeIntervalSince1970)) }
         if query.bookmarkedOnly { conditions.append("\(prefix)bookmarked=1") }
         if let kind = query.kind { conditions.append("\(prefix)kind=?"); values.append(.text(kind)) }
+        if query.screensOnly { conditions.append("\(prefix)kind<>'meeting'") }
         return (conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND "), values)
     }
 

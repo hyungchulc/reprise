@@ -45,6 +45,14 @@ final class AppModel: ObservableObject {
     @Published private(set) var pendingQuestion: String?
     @Published var selection: Moment?
     @Published private(set) var timelineDate: Date?
+    /// The recording open in its panel above the bottom bar. Only a choice opens one: its lane under
+    /// the timeline, a search result, a citation or a notification. Moving through the timeline,
+    /// which shows screens, never does.
+    @Published private(set) var openRecording: Moment?
+    /// Where playback starts when a recording opens part-way through, in seconds.
+    @Published var recordingOffset: TimeInterval?
+    /// The time a recording stays open for while the timeline moves.
+    private var recordingSpan: ClosedRange<Date>?
     @Published private(set) var timelineAxis = MemoryTimelineAxis(entries: [])
     @Published var stats = LibraryStats()
     @Published var usages: [UsageEntry] = []
@@ -73,6 +81,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var thinkingLevels: [String] = []
     /// What Fast mode costs when the provider takes it as a setting for the chosen model.
     @Published private(set) var fastSettingNote: String?
+    /// The context windows the provider's CLI offers for the chosen model, with its default.
+    @Published private(set) var contextWindows: (standard: Int, options: [Int])?
     /// Screens saved before 0.8.1 that are still waiting to have their text read again.
     @Published private(set) var screensToReread = 0
     /// Every memory in the time a quick search names, when only part of it is shown.
@@ -152,8 +162,12 @@ final class AppModel: ObservableObject {
             .store(in: &subscriptions)
         meeting.$lastSavedMoment.compactMap { $0 }.sink { [weak self] moment in
             guard let self else { return }
-            if self.selection?.id == moment.id || self.meeting.isBusy && self.meeting.transcribingMomentID == nil {
-                self.select(moment)
+            // An open recording picks up its new transcript; a newly saved one opens for its time.
+            if self.openRecording?.id == moment.id { self.openRecording = moment }
+            else if self.meeting.isBusy && self.meeting.transcribingMomentID == nil {
+                self.openRecording = moment; self.recordingOffset = nil
+                let end = moment.timestamp.addingTimeInterval(moment.audioDuration ?? 0)
+                self.recordingSpan = moment.timestamp.addingTimeInterval(-60)...end.addingTimeInterval(60)
             }
             Task { await self.reload(preserve: true) }
         }.store(in: &subscriptions)
@@ -164,8 +178,13 @@ final class AppModel: ObservableObject {
             self.watchedTranscription = id
             if id == nil, let finished { Task { await self.transcriptionFinished(finished) } }
         }.store(in: &subscriptions)
-        $selection.compactMap { $0 }.filter { $0.kind == "meeting" }.removeDuplicates { $0.id == $1.id }.sink { [weak self] moment in
+        $openRecording.compactMap { $0 }.removeDuplicates { $0.id == $1.id }.sink { [weak self] moment in
             Task { await self?.loadSummary(for: moment.id) }
+        }.store(in: &subscriptions)
+        // The recording stays open while the timeline is within its time.
+        $timelineDate.compactMap { $0 }.sink { [weak self] date in
+            guard let self, let span = self.recordingSpan, !span.contains(date) else { return }
+            self.closeRecording()
         }.store(in: &subscriptions)
         NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange).sink { [weak self] _ in
             Task { @MainActor in self?.timeZone = .autoupdatingCurrent; await self?.reload() }
@@ -239,6 +258,7 @@ final class AppModel: ObservableObject {
             stats = updatedStats
             if !preserve || moments.isEmpty || oldCount != stats.momentCount {
                 var timelineQuery = query; timelineQuery.text = ""; timelineQuery.appName = nil; timelineQuery.kind = nil
+                timelineQuery.screensOnly = true
                 let latest = try await store.query(timelineQuery)
                 guard generation == timelineGeneration else { return }
                 let followLatest = wasAtLatest && selectedID == selection?.id
@@ -428,9 +448,46 @@ final class AppModel: ObservableObject {
     }
 
     func openMatch(_ moment: Moment) async {
+        // A recording opens in its panel, over the screens of its time.
+        if moment.kind == "meeting" { await openRecording(moment); return }
         searchOnly = false
         cancelNavigation()
         await showMoment(moment, generation: navigationGeneration)
+    }
+
+    /// Opens a recording, at `date` when it is chosen part-way through, and moves the timeline there.
+    func openRecording(_ moment: Moment, at date: Date? = nil) async {
+        guard moment.kind == "meeting" else { return }
+        searchOnly = false
+        recordingSpan = nil
+        openRecording = moment
+        let start = moment.timestamp, end = start.addingTimeInterval(moment.audioDuration ?? 0)
+        let target = min(end, max(start, date ?? start))
+        let offset = target.timeIntervalSince(start)
+        recordingOffset = offset >= 1 ? offset : nil
+        await jump(to: target)
+        guard openRecording?.id == moment.id else { return }
+        // The nearest screen can sit just outside a recording, so the span includes it.
+        let landed = timelineDate ?? target
+        recordingSpan = min(start, landed).addingTimeInterval(-60)...max(end, landed).addingTimeInterval(60)
+    }
+
+    func openRecording(id: String, at date: Date? = nil) async {
+        do { if let moment = try await store.moment(id: id) { await openRecording(moment, at: date) } }
+        catch { self.error = error.localizedDescription }
+    }
+
+    func closeRecording() {
+        openRecording = nil; recordingSpan = nil; recordingOffset = nil
+    }
+
+    func deleteRecording() async {
+        guard let recording = openRecording else { return }
+        do {
+            try await store.delete(ids: [recording.id])
+            closeRecording()
+            await reload(preserve: true)
+        } catch { self.error = error.localizedDescription }
     }
 
     private func cancelNavigation() {
@@ -510,8 +567,8 @@ final class AppModel: ObservableObject {
         if !meeting.isRecording, let message = meeting.lastError { error = message }
     }
 
-    func transcribeSelected() async {
-        guard let moment = selection, moment.kind == "meeting", !meeting.isBusy, !meeting.isRecording else { return }
+    func transcribeRecording() async {
+        guard let moment = openRecording, !meeting.isBusy, !meeting.isRecording else { return }
         if !SpeechLanguages.usesSpeechAnalyzer {
             await permissions.request(.speech)
             guard permissions.speech == .authorized else {
@@ -519,7 +576,7 @@ final class AppModel: ObservableObject {
             }
         }
         await meeting.transcribeSaved(moment, locales: preferences.speechLocales)
-        if selection?.id == moment.id, let updated = meeting.lastSavedMoment, updated.id == moment.id { selection = updated }
+        if openRecording?.id == moment.id, let updated = meeting.lastSavedMoment, updated.id == moment.id { openRecording = updated }
     }
 
     func saveSettings() async {
@@ -540,7 +597,7 @@ final class AppModel: ObservableObject {
     func selectProvider(_ kind: AIProviderKind) {
         providerConfigurations[provider.provider.rawValue] = provider
         provider = providerConfigurations[kind.rawValue] ?? AIProviderConfiguration(provider: kind)
-        providerStatus = nil; accountStatus = nil; availableModels = []; thinkingLevels = []; fastSettingNote = nil
+        providerStatus = nil; accountStatus = nil; availableModels = []; thinkingLevels = []; fastSettingNote = nil; contextWindows = nil
         cancelAnswer()
         Task { await saveSettings(); await refreshStatus() }
     }
@@ -552,12 +609,16 @@ final class AppModel: ObservableObject {
         let capabilities = await ai.status(configuration: config)
         let account = await ai.accountStatus(configuration: config)
         let options = await ai.models(configuration: config)
-        let (levels, fastNote) = await Task.detached {
-            (config.provider.thinkingLevels(model: config.model), config.provider.fastSettingNote(model: config.model))
-        }.value
+        let (levels, fastNote, windows) = await Task.detached { Self.modelSettings(config) }.value
         guard config == provider, statusGeneration == token else { return }
         providerStatus = capabilities; accountStatus = account; availableModels = options; checkingProvider = false
-        thinkingLevels = levels; fastSettingNote = fastNote
+        thinkingLevels = levels; fastSettingNote = fastNote; contextWindows = windows
+    }
+
+    /// What the provider's CLI offers for the chosen model, read from its own files off the main thread.
+    private nonisolated static func modelSettings(_ config: AIProviderConfiguration) -> ([String], String?, (standard: Int, options: [Int])?) {
+        (config.provider.thinkingLevels(model: config.model), config.provider.fastSettingNote(model: config.model),
+         config.provider.contextWindows(model: config.model))
     }
 
     // MARK: Model and thinking level
@@ -643,6 +704,34 @@ final class AppModel: ObservableObject {
         providerChoiceChanged()
     }
 
+    // MARK: Context window
+
+    private func windowName(_ tokens: Int) -> String { tokens.formatted(.number.notation(.compactName)) + " tokens" }
+    var contextWindowChoices: [Choice] {
+        guard let windows = contextWindows else { return [] }
+        return windows.options.map { Choice(id: String($0), name: windowName($0) + ($0 == windows.standard ? " (default)" : "")) }
+    }
+    /// The window in use: a chosen one while it still applies to the model, else the default.
+    var contextWindowChoice: String {
+        guard let windows = contextWindows else { return "" }
+        if let chosen = provider.contextWindow, chosen != windows.standard, windows.options.contains(chosen),
+           provider.provider != .grok || !provider.model.isEmpty { return String(chosen) }
+        return String(windows.standard)
+    }
+
+    func chooseContextWindow(_ id: String) {
+        guard let windows = contextWindows, let tokens = Int(id), windows.options.contains(tokens), id != contextWindowChoice else { return }
+        if tokens == windows.standard { provider.contextWindow = nil } else {
+            // Grok applies a window only to a model named on its command line, so its default is named.
+            if provider.provider == .grok, provider.model.isEmpty {
+                guard let named = availableModels.first(where: \.isDefault)?.id else { return }
+                provider.model = named
+            }
+            provider.contextWindow = tokens
+        }
+        providerChoiceChanged()
+    }
+
     // MARK: Fast mode
 
     /// Grok and Cursor list Fast as its own model; Claude and Codex take it as a setting.
@@ -685,10 +774,8 @@ final class AppModel: ObservableObject {
         let config = provider
         Task {
             await saveSettings()
-            let (levels, fastNote) = await Task.detached {
-                (config.provider.thinkingLevels(model: config.model), config.provider.fastSettingNote(model: config.model))
-            }.value
-            if config == provider { thinkingLevels = levels; fastSettingNote = fastNote }
+            let (levels, fastNote, windows) = await Task.detached { Self.modelSettings(config) }.value
+            if config == provider { thinkingLevels = levels; fastSettingNote = fastNote; contextWindows = windows }
         }
     }
 

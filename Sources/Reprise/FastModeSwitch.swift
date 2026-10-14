@@ -13,8 +13,10 @@ struct FastModeSwitch: View {
         let isOn = Binding(get: { model.fastOn }, set: { on in if on { confirming = true } else { model.setFast(false) } })
         Group {
             if compact {
-                Toggle(isOn: isOn) { Label("Fast", systemImage: model.fastOn ? "bolt.fill" : "bolt") }
+                // An icon alone keeps the search bar's row from crowding.
+                Toggle(isOn: isOn) { Image(systemName: model.fastOn ? "bolt.fill" : "bolt") }
                     .toggleStyle(.button).help(model.fastOn ? "Fast mode is on" : "Fast mode")
+                    .accessibilityLabel("Fast mode")
             } else {
                 Toggle("Fast mode", isOn: isOn)
             }

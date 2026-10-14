@@ -294,6 +294,14 @@ struct AISettings: View {
                         ForEach(model.thinkingChoices) { Text($0.name).tag($0.id) }
                     }
                 }
+                if !model.contextWindowChoices.isEmpty {
+                    Picker("Context window", selection: Binding(get: { model.contextWindowChoice }, set: { model.chooseContextWindow($0) })) {
+                        ForEach(model.contextWindowChoices) { Text($0.name).tag($0.id) }
+                    }
+                    Text((kind == .claude ? "Claude Code works within this window and compacts at its edge; the model itself holds 1M. " : "How much the model can hold at once. ")
+                         + "A search sends only a few thousand tokens and Reprise never compacts a conversation, so the choice mostly changes the ring's scale.")
+                        .repriseFont(.caption).foregroundStyle(.secondary)
+                }
                 if model.fastAvailable {
                     FastModeSwitch(model: model)
                     Text(model.fastSettingNote ?? "Uses the model's Fast version, which answers sooner and uses your plan's limits faster.")

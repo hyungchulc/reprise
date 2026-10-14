@@ -107,6 +107,52 @@ final class QuickSearchTimeTests: XCTestCase {
         XCTAssertEqual(CodexAnswerCatalog.contextWindow(model: "plain", home: home), 272000)
     }
 
+    func testCodexReadsTheCatalogItsConfigNames() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-codex-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let codex = home.appendingPathComponent(".codex")
+        try FileManager.default.createDirectory(at: codex, withIntermediateDirectories: true)
+        try Data(#"{"models":[{"slug":"sol","visibility":"list","context_window":250000}]}"#.utf8).write(to: codex.appendingPathComponent("models_cache.json"))
+        XCTAssertEqual(CodexAnswerCatalog.contextWindow(model: "sol", home: home), 250000)
+        try Data(#"{"models":[{"slug":"sol","visibility":"list","context_window":500000},{"slug":"cursor/x","visibility":"list"}]}"#.utf8).write(to: home.appendingPathComponent("managed.json"))
+        try Data("model = \"sol\"\nmodel_catalog_json = \"~/managed.json\" # managed\n[features]\nmodel_catalog_json = \"/elsewhere.json\"\n".utf8)
+            .write(to: codex.appendingPathComponent("config.toml"))
+        XCTAssertEqual(CodexAnswerCatalog.contextWindow(model: "sol", home: home), 500000)
+        XCTAssertEqual(CodexAnswerCatalog.models(home: home)?.compactMap { $0["slug"] as? String }, ["sol"])
+    }
+
+    func testGrokWindowsComeOnlyFromItsCatalogInfo() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("grok-models-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data(#"{"identity":"someone","models":{"grok-4.7":{"api_key":null,"info":{"context_window":256000,"context_windows":[256000,500000]}},"broken":{"info":{"context_window":"big"}}}}"#.utf8).write(to: url)
+        XCTAssertEqual(AIProcessRunner.grokWindows(url), ["grok-4.7": 256000])
+        let listed = ["grok-4.7-build-fast": 256000, "grok-4.6": 256000]
+        XCTAssertEqual(AICommand.grokWindow(listed, requested: "", served: "grok-4.7-build"), 256000)
+        XCTAssertEqual(AICommand.grokWindow(["grok-4.7": 500000, "grok-4.6": 256000], requested: "grok-4.7", served: "grok-4.7-build"), 500000)
+        XCTAssertNil(AICommand.grokWindow(["grok-4.7": 500000, "grok-4.6": 256000], requested: "", served: "grok-5"))
+    }
+
+    func testClaudeWindowChoiceCoversItsMillionTokenModels() {
+        XCTAssertEqual(AIProviderKind.claude.contextWindows(model: "opus")?.options, [500_000, 1_000_000])
+        XCTAssertEqual(AIProviderKind.claude.contextWindows(model: "")?.standard, 1_000_000)
+        XCTAssertNotNil(AIProviderKind.claude.contextWindows(model: "claude-sonnet-5-5"))
+        XCTAssertNil(AIProviderKind.claude.contextWindows(model: "claude-opus-4-6"))
+        XCTAssertNil(AIProviderKind.claude.contextWindows(model: "sonnet[1m]"))
+    }
+
+    func testGrokWindowChoiceNamesTheModelInItsConfig() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("grok-home-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".grok"), withIntermediateDirectories: true)
+        try Data(#"{"identity":"someone","models":{"grok-4.7":{"info":{"context_window":256000,"context_windows":[256000,500000]}},"grok-4.7-build-fast":{"info":{"context_window":256000,"context_windows":[500000,256000]}}}}"#.utf8)
+            .write(to: home.appendingPathComponent(".grok/models_cache.json"))
+        XCTAssertEqual(AICommand.grokCatalogWindows(model: "grok-4.7", home: home)?.options, [256000, 500000])
+        XCTAssertEqual(AICommand.grokCatalogWindows(model: "", home: home)?.standard, 256000)
+        XCTAssertNil(AICommand.grokCatalogWindows(model: "grok-5", home: home))
+        XCTAssertTrue(AICommand.grokConfig(window: ("grok-4.7-build-fast", 500000)).hasSuffix("\n[model.\"grok-4.7-build-fast\"]\ncontext_window = 500000\n"))
+        XCTAssertEqual(AICommand.grokConfig(window: nil), AICommand.grokConfig)
+    }
+
     func testClaudeContextCountsCachedTokens() throws {
         let data = Data(#"{"type":"result","subtype":"success","is_error":false,"result":"{\"answer\":\"ok\"}","structured_output":{"answer":"ok"},"usage":{"input_tokens":12,"cache_creation_input_tokens":3000,"cache_read_input_tokens":17000,"output_tokens":40},"modelUsage":{"claude-opus-5-5":{"contextWindow":1000000}}}"#.utf8)
         let parsed = try AIResponseParser.structured(data, provider: .claude, requestedModel: "opus", duration: 1)

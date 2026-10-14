@@ -14,8 +14,10 @@ final class MomentStoreTests: XCTestCase {
         let root = try temporaryRoot()
         let store = try MomentStore(root: root, keys: testKeys)
         let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
-        let first = Moment(id: "first", timestamp: timestamp, appName: "Editor", text: "original text\0tail", videoPath: "clips/meeting.mov", videoOffset: 4.5, kind: "meeting", byteCount: 12)
+        let first = Moment(id: "first", timestamp: timestamp, appName: "Editor", text: "original text\0tail", videoPath: "clips/screen.mov", videoOffset: 4.5, byteCount: 12)
         try await store.insert(first)
+        // A recording nearer than any screen: the timeline steps past it and opens it only from its lane.
+        try await store.insert(Moment(id: "recording", timestamp: timestamp.addingTimeInterval(-50), appName: "Meeting", text: "", kind: "meeting"))
         try await store.insert(Moment(id: "later", timestamp: timestamp.addingTimeInterval(1), appName: "Browser", text: "later text"))
         _ = try await store.moment(id: "first")
         let reopened = try MomentStore(root: root, keys: testKeys)
@@ -38,7 +40,7 @@ final class MomentStoreTests: XCTestCase {
         XCTAssertEqual(bookmarked?.isBookmarked, true)
         let crossConnection = try await store.moment(id: "first")
         XCTAssertEqual(crossConnection?.isBookmarked, true)
-        let bookmarks = try await reopened.query(MomentQuery(appName: "Editor", bookmarkedOnly: true, kind: "meeting"))
+        let bookmarks = try await reopened.query(MomentQuery(appName: "Editor", bookmarkedOnly: true, kind: "screen"))
         XCTAssertEqual(bookmarks.map(\.id), ["first"])
         var updated = first
         updated.text = "replacement content"

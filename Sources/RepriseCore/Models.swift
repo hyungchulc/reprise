@@ -58,6 +58,8 @@ public struct MomentQuery: Sendable {
     public var until: Date?
     public var bookmarkedOnly: Bool = false
     public var kind: String?
+    /// Leaves recordings out, as the timeline does.
+    public var screensOnly = false
     public var limit: Int = 100
     public var offset: Int = 0
     public init(text: String = "", appName: String? = nil, since: Date? = nil, until: Date? = nil, bookmarkedOnly: Bool = false, kind: String? = nil, limit: Int = 100, offset: Int = 0) {
