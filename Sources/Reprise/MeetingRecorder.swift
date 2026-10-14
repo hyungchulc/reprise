@@ -291,13 +291,15 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
         } else {
             phraseRows = request.speakerLabels
             defer { phraseRows = false }
+            var labeled = false
             switch request.engine {
             case .openAI: await transcribeWithOpenAI(url, request: request)
             case .whisperKit: await transcribeWithWhisper(url, request: request)
             case .apple: await transcribeOnDevice(url, locales: request.locales)
+            case .gemini: labeled = await transcribeWithGemini(url, request: request)
             }
             if request.speakerLabels, !transcriptSegments.isEmpty {
-                if !transcriptionCancelled { await labelSpeakers(url) }
+                if !transcriptionCancelled, !labeled { await labelSpeakers(url) }
                 transcriptSegments = TranscriptMerge.rows(transcriptSegments)
             }
             if !transcriptSegments.isEmpty { transcript = SpeakerLabels.text(transcriptSegments) }
@@ -366,6 +368,52 @@ final class MeetingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate
             }
             appendTranscriptionWarning("OpenAI: \(error.localizedDescription) Transcribed with Apple on this Mac instead.")
             await transcribeOnDevice(url, locales: request.locales)
+        }
+    }
+
+    /// Gemini through the Google AI plan or API key. Without either, or when Gemini fails, the
+    /// recording is transcribed on this Mac instead. Returns whether Gemini labeled the speakers.
+    private func transcribeWithGemini(_ url: URL, request: TranscriptionRequest) async -> Bool {
+        status = "Preparing the recording for Gemini"
+        let started = Date()
+        do {
+            let audio = try await RecordingPCM(url: url, cipher: store.cipher, sampleRate: GeminiTranscriber.sampleRate)
+            let transcriber = GeminiTranscriber(access: request.geminiAccess, model: request.geminiModel, executable: request.geminiPath,
+                                                speakers: request.speakerLabels, language: request.languageHint)
+            let parts = PartsDone()
+            // Gemini answers each piece at once, so the time spent shows it is still working.
+            let ticker = Task { [weak self] in
+                while !Task.isCancelled {
+                    let (done, total) = parts.value
+                    let elapsed = Duration.seconds(Int(Date().timeIntervalSince(started))).formatted(.time(pattern: .minuteSecond))
+                    await MainActor.run {
+                        guard let self, self.transcribingPath != nil else { return }
+                        self.status = total > 1 ? "Transcribing with Gemini, \(done) of \(total) parts, \(elapsed)" : "Transcribing with Gemini, \(elapsed)"
+                    }
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
+            defer { ticker.cancel() }
+            let work = Task.detached(priority: .userInitiated) { try await transcriber.transcribe(audio, progress: { parts.set($0, $1) }) }
+            analysisCancel = { work.cancel(); audio.cancel() }
+            defer { analysisCancel = nil }
+            let result = try await work.value
+            transcriptSegments = result.segments
+            transcript = SpeakerLabels.text(transcriptSegments)
+            if transcriptSegments.isEmpty { appendTranscriptionWarning("Gemini heard no speech in this recording.") }
+            if request.speakerLabels, !result.labeledSpeakers, !transcriptSegments.isEmpty, speechModels.speakers != .ready {
+                appendTranscriptionWarning("Gemini labels speakers in recordings up to 20 minutes. For longer ones, download the speaker model in Audio settings.")
+                return true
+            }
+            return result.labeledSpeakers
+        } catch {
+            guard !transcriptionCancelled else {
+                appendTranscriptionWarning("Transcription stopped. Complete audio was kept.")
+                return false
+            }
+            appendTranscriptionWarning("Gemini: \(error.localizedDescription) Transcribed with Apple on this Mac instead.")
+            await transcribeOnDevice(url, locales: request.locales)
+            return false
         }
     }
 

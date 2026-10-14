@@ -230,6 +230,10 @@ struct AudioMenuItems: View {
             NotificationCenter.default.post(name: .repriseOpenMemory, object: nil)
             Task { await model.toggleMeeting() }
         }.disabled(meeting.isBusy)
+        Picker("Transcribe With", selection: $model.preferences.transcriptionEngine) {
+            ForEach(TranscriptionEngine.allCases) { Text($0.title).tag($0) }
+        }
+        Divider()
         Toggle("Meeting Assistant", isOn: Binding(get: { assistant.isRunning }, set: { _ in Task { await model.toggleAssistant() } }))
         Button("Answer Last Question") { Task { await model.answerLastQuestion() } }.disabled(!assistant.isRunning)
         Toggle("Live Captions", isOn: Binding(get: { captions.isRunning }, set: { _ in Task { await model.toggleCaptions() } }))

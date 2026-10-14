@@ -477,6 +477,10 @@ enum AICommand {
 
     /// Strict review mode: a print run cannot approve, so every tool request is denied.
     static let geminiSettings = #"{"toolPermission":"strict","showTips":false,"showFeedbackSurvey":false}"#
+    /// Review mode, for a request that reads a file Reprise put in its workspace: reading inside
+    /// the workspace is granted, and a print run cannot approve anything else, so commands, edits
+    /// and web access are denied.
+    static let geminiReadSettings = #"{"toolPermission":"request-review","showTips":false,"showFeedbackSurvey":false}"#
 
     /// Cursor reads these workspace rules on top of the user's own; deny wins.
     static let cursorPermissions = #"{"permissions":{"allow":[],"deny":["Shell(*)","Read(**)","Write(**)","Read(/**)","Write(/**)","WebFetch(*)","Mcp(*:*)"]}}"#
@@ -642,8 +646,9 @@ enum AIResponseParser {
         try response(structured(data, provider: provider, requestedModel: requestedModel, duration: duration), citations: citations)
     }
 
+    /// `allowedTools` names Antigravity tools a request asks for, such as reading a file it was given.
     static func structured(_ data: Data, provider: AIProviderKind, requestedModel: String,
-                           duration: Double) throws -> AIJSONResult {
+                           duration: Double, allowedTools: Set<String> = []) throws -> AIJSONResult {
         guard !data.isEmpty, data.count <= 2 * 1024 * 1024, let raw = String(data: data, encoding: .utf8) else {
             throw AIProviderError.invalidResponse
         }
@@ -666,14 +671,17 @@ enum AIResponseParser {
         var assistantText: String?, streamedText = ""
         var structured: [String: Any]?
         for event in events {
-            if containsTool(event) { throw AIProviderError.toolAttempt }
+            // A file Antigravity was asked to read comes back inside its tool step.
+            if provider != .gemini || allowedTools.isEmpty, containsTool(event) { throw AIProviderError.toolAttempt }
             if provider == .gemini {
                 // Antigravity names its events with "event". Its structured answer arrives through the
                 // finish step; any other tool step means the model tried to act.
                 switch event["event"] as? String {
                 case "step_update":
                     let step = event["step_update"] as? [String: Any]
-                    if step?["step_type"] as? String == "tool", step?["tool_name"] as? String != "finish" { throw AIProviderError.toolAttempt }
+                    if step?["step_type"] as? String == "tool", !allowedTools.union(["finish"]).contains(step?["tool_name"] as? String ?? "") {
+                        throw AIProviderError.toolAttempt
+                    }
                 case "result":
                     guard let value = event["result"] as? [String: Any] else { throw AIProviderError.invalidResponse }
                     if let denied = value["denied_actions"] as? [Any], !denied.isEmpty { throw AIProviderError.toolAttempt }
@@ -861,15 +869,20 @@ private final class AICancellation: @unchecked Sendable {
 private func repriseChildPIDs(_ parent: Int32, _ buffer: UnsafeMutableRawPointer?, _ size: Int32) -> Int32
 
 enum AIProcessRunner {
+    /// Stands for Antigravity's workspace folder in the input when files are attached.
+    static let workspaceToken = "<workspace>"
+
+    /// `attachments` are copied into Antigravity's workspace, which it may then read.
     static func run(executable: URL, arguments: [String], input: Data, timeout: Double,
                     outputLimit: Int = 2 * 1024 * 1024, provider: AIProviderKind? = nil,
-                    schema: String? = nil, environment: [String: String] = [:], grokWindow: (model: String, tokens: Int)? = nil) async throws -> AIProcessOutput {
+                    schema: String? = nil, environment: [String: String] = [:], grokWindow: (model: String, tokens: Int)? = nil,
+                    attachments: [URL] = []) async throws -> AIProcessOutput {
         let cancellation = AICancellation()
         return try await withTaskCancellationHandler(operation: {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
-                    do { continuation.resume(returning: try execute(executable, arguments, input, timeout, outputLimit, cancellation, provider, schema, environment, grokWindow)) }
+                    do { continuation.resume(returning: try execute(executable, arguments, input, timeout, outputLimit, cancellation, provider, schema, environment, grokWindow, attachments)) }
                     catch { continuation.resume(throwing: error) }
                 }
             }
@@ -879,7 +892,8 @@ enum AIProcessRunner {
     private static func execute(_ executable: URL, _ arguments: [String], _ input: Data, _ timeout: Double,
                                 _ outputLimit: Int, _ cancellation: AICancellation,
                                 _ provider: AIProviderKind?, _ schema: String?, _ environment: [String: String],
-                                _ grokWindow: (model: String, tokens: Int)?) throws -> AIProcessOutput {
+                                _ grokWindow: (model: String, tokens: Int)?, _ attachments: [URL]) throws -> AIProcessOutput {
+        var input = input
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent("reprise-ai-\(UUID().uuidString)", isDirectory: true).resolvingSymlinksInPath()
         try fm.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -924,7 +938,13 @@ enum AIProcessRunner {
             try fm.createDirectory(at: workspace, withIntermediateDirectories: true)
             let token = fm.homeDirectoryForCurrentUser.appendingPathComponent(".gemini/antigravity-cli/antigravity-oauth-token")
             try fm.createSymbolicLink(at: state.appendingPathComponent("antigravity-oauth-token"), withDestinationURL: token)
-            try Data(AICommand.geminiSettings.utf8).write(to: state.appendingPathComponent("settings.json"), options: .atomic)
+            try Data((attachments.isEmpty ? AICommand.geminiSettings : AICommand.geminiReadSettings).utf8)
+                .write(to: state.appendingPathComponent("settings.json"), options: .atomic)
+            for file in attachments { try fm.copyItem(at: file, to: workspace.appendingPathComponent(file.lastPathComponent)) }
+            if !attachments.isEmpty {
+                let text = String(decoding: input, as: UTF8.self)
+                input = Data(text.replacingOccurrences(of: workspaceToken, with: AIProcessSandbox.canonicalPath(workspace)).utf8)
+            }
             process.currentDirectoryURL = workspace
             process.executableURL = AIProcessSandbox.executable
             // The sign-in file stays writable so an expired access token can be refreshed in place.

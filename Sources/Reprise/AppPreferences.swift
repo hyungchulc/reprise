@@ -36,6 +36,9 @@ struct AppPreferences: Codable, Equatable {
     var openAITranscriptionModel = OpenAITranscriptionModel.standard
     var openAIAccess = OpenAIAccess.chatGPT
     var whisperModel = WhisperModel.recommended
+    var geminiAccess = GeminiAccess.subscription
+    /// Empty picks the light Flash model.
+    var geminiTranscriptionModel = ""
     /// Finds who spoke when, on this Mac, and names each voice in the transcript.
     var speakerLabels = false
     var captions = CaptionPreferences()
@@ -73,6 +76,8 @@ struct AppPreferences: Codable, Equatable {
         openAITranscriptionModel = values.value(.openAITranscriptionModel, default: defaults.openAITranscriptionModel)
         openAIAccess = values.value(.openAIAccess, default: defaults.openAIAccess)
         whisperModel = values.value(.whisperModel, default: defaults.whisperModel)
+        geminiAccess = values.value(.geminiAccess, default: defaults.geminiAccess)
+        geminiTranscriptionModel = values.value(.geminiTranscriptionModel, default: defaults.geminiTranscriptionModel)
         speakerLabels = values.value(.speakerLabels, default: defaults.speakerLabels)
         captions = values.value(.captions, default: defaults.captions)
         assistant = values.value(.assistant, default: defaults.assistant)

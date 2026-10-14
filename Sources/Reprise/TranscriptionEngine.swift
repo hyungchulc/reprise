@@ -9,6 +9,8 @@ enum TranscriptionEngine: String, Codable, CaseIterable, Identifiable {
     case whisperKit
     /// OpenAI's transcription models through the person's ChatGPT plan, signed in with Codex, or an API key.
     case openAI
+    /// Google's Gemini models through the person's Google AI plan, signed in with Antigravity, or an API key.
+    case gemini
     var id: String { rawValue }
 
     var title: String {
@@ -16,6 +18,7 @@ enum TranscriptionEngine: String, Codable, CaseIterable, Identifiable {
         case .apple: "Apple, on this Mac"
         case .whisperKit: "Whisper, on this Mac"
         case .openAI: "OpenAI, online"
+        case .gemini: "Gemini, online"
         }
     }
 
@@ -24,6 +27,7 @@ enum TranscriptionEngine: String, Codable, CaseIterable, Identifiable {
         case .apple: "Apple"
         case .whisperKit: "Whisper"
         case .openAI: "OpenAI"
+        case .gemini: "Gemini"
         }
     }
 
@@ -35,6 +39,8 @@ enum TranscriptionEngine: String, Codable, CaseIterable, Identifiable {
             "OpenAI's open Whisper model runs on this Mac through WhisperKit and recognizes about 100 languages on its own. The model downloads once from Hugging Face; recordings never leave this Mac."
         case .openAI:
             "OpenAI's newest transcription models, through your ChatGPT plan or an OpenAI API key. Recordings are sent to OpenAI to be transcribed. When neither works, Reprise transcribes with Apple on this Mac instead."
+        case .gemini:
+            "Google's Gemini listens to the recording and tells the voices apart, through your Google AI plan or a Gemini API key. Recordings are sent to Google to be transcribed. When neither works, Reprise transcribes with Apple on this Mac instead."
         }
     }
 
@@ -85,9 +91,13 @@ struct TranscriptionRequest: Sendable {
     var openAIModel = OpenAITranscriptionModel.standard
     var openAIAccess = OpenAIAccess.chatGPT
     var whisperModel = WhisperModel.recommended
+    var geminiAccess = GeminiAccess.subscription
+    var geminiModel = ""
     var speakerLabels = false
     /// The Codex set in AI & Models; its ChatGPT sign-in reaches OpenAI.
     var codexPath: String?
+    /// The Antigravity set in AI & Models; its Google sign-in reaches Gemini.
+    var geminiPath: String?
 
     /// One chosen language goes along as a hint; with several, the model recognizes each part.
     var languageHint: String? {

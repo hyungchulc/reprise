@@ -63,7 +63,7 @@ downloaded-installation test on every supported macOS version.
 | Screen memory | Periodic ScreenCaptureKit still frames of the display you are using, on-device Vision OCR, browser page addresses, local full-text index |
 | Timeline | Full-screen overlay, app icons and icon-derived colors, calendar, compressed recording gaps, 30-second navigation |
 | Search | Local keyword search that also matches Korean words with particles, AI query planning, source-linked answers, follow-up questions, saved conversations |
-| Meetings | Explicit microphone recording, optional system audio, post-recording transcription with Apple's models or Whisper on your Mac, or OpenAI's newest models with a ChatGPT plan or API key, on-device speaker labels you can rename, automatic summaries with decisions and action items, inline playback and timestamp seeking |
+| Meetings | Explicit microphone recording, optional system audio, post-recording transcription with Apple's models or Whisper on your Mac, OpenAI's newest models with a ChatGPT plan or API key, or Gemini with a Google AI plan or API key, speaker labels you can rename, automatic summaries with decisions and action items, inline playback and timestamp seeking |
 | Live captions | Captions over every app and full-screen video for what the Mac plays or the microphone, translated as they are spoken, by OpenAI with a ChatGPT plan or API key or on this Mac with Apple's speech and translation models on macOS 26; text size, color, background, lines and position |
 | Meeting assistant | A floating window that hears you and the others, answers the others' questions within about a second from the conversation and your memories with source links, and takes typed questions; searches the web through Codex, Claude Code or an API key, and calls tools from MCP servers you add; OpenAI's Realtime model with a ChatGPT plan or API key, or any AI & Models provider; listening on this Mac on macOS 26 |
 | AI providers | Claude, Codex, Gemini, Grok, Cursor and OpenCode (free models) through their CLIs; your own OpenAI, Anthropic or Gemini API key; Apple's on-device model and Ollama on your Mac; install and sign-in from Settings, model, thinking-level and Fast mode controls in search, a context window choice for Claude and Grok, and reported token and context use |
@@ -125,8 +125,8 @@ reduce agent side effects; they are not a guarantee that a third-party executabl
 is trustworthy. Remaining subscription quota is shown as unknown when unavailable. Private Cloud
 Compute is not available to third-party apps. Without a subscription, choose
 OpenAI API, Anthropic API or Gemini API and paste a key: search, summaries and the meeting
-assistant then run on that API account, billed by the token, and an OpenAI key also serves
-transcription, live captions and the assistant's listening. See [provider contracts](docs/PROVIDERS.md).
+assistant then run on that API account, billed by the token. An OpenAI key also serves
+transcription, live captions and the assistant's listening, and a Gemini key transcription. See [provider contracts](docs/PROVIDERS.md).
 
 ## MCP Connections
 
@@ -172,8 +172,10 @@ chosen in **Settings > Audio & Meetings**. Apple's speech models work on this Ma
 chosen language and keep, for every passage, the language that fits it best. Whisper runs
 on this Mac through WhisperKit after a one-time model download. OpenAI's transcription
 models run online through the ChatGPT plan the Codex CLI is signed in with, or an OpenAI
-API key; without either, Reprise transcribes with Apple on this Mac instead. Speaker
-labels are found on this Mac and can be renamed in the transcript.
+API key; without either, Reprise transcribes with Apple on this Mac instead. Gemini listens
+to the recording through the Google AI plan the Antigravity CLI is signed in with, or a
+Gemini API key, and tells the voices apart in recordings up to 20 minutes. Other speaker
+labels are found on this Mac. Speakers can be renamed in the transcript.
 When a transcript is ready, the chosen AI provider summarizes it into an overview,
 key points, decisions and action items, and a notification opens the recording. The
 summary is stored encrypted with the recording; the notification shows only the

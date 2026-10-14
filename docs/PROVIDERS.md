@@ -254,6 +254,30 @@ to mono float PCM without a plaintext copy.
   pieces run at a time; a dropped connection retries its piece once. Models offered: GPT
   Transcribe (default), GPT Live Transcribe, GPT-4o Transcribe, GPT-4o mini Transcribe and
   GPT Realtime Whisper.
+- **Gemini** hears the audio itself. The recording is decoded at 16 kHz and cut into
+  20-minute pieces at the quietest moment near each edge; each piece is encoded as mono
+  32 kbps AAC into a private temporary folder. Gemini is asked for JSON segments with a
+  start time (`M:SS`), a speaker (`Speaker 1`, `Speaker 2`, … in speaking order) and the
+  words verbatim, with the chosen language as a hint when exactly one is chosen. A segment
+  ends where the next starts, or after about the time its words take.
+  - With a Google AI plan, the piece is an `.m4a` copied into the workspace of an Antigravity
+    run set up as for answers (private home, linked sign-in, kernel sandbox) but in
+    `request-review` permission mode, which grants reads inside the workspace only; a print
+    run cannot approve anything else. The prompt names the file's absolute path. Any tool
+    step other than `view_file` and `finish`, or any denied action, rejects the answer. Two
+    pieces run at a time with a timeout of three quarters of the piece's length (at least five
+    minutes); in testing, 20 minutes of speech took about six minutes, most of it thinking,
+    which is why pieces are not longer. Automatic uses the light-thinking Gemini Flash model.
+  - With a Gemini API key, the piece is raw AAC (ADTS) sent inline as `audio/aac` to
+    `generateContent` with `responseJsonSchema` and a low thinking setting (`thinkingLevel`
+    for Gemini 3 and later, a zero budget for earlier Flash), asked again without that setting
+    or the schema if the model refuses them. Three pieces run at a time. Automatic uses the
+    newest non-Lite Flash the key lists.
+
+  A broken answer or a CLI that stopped retries its piece once. Gemini names voices within
+  one piece, so its labels are kept for recordings of one piece; longer recordings are
+  labeled on this Mac by the speaker model when it is downloaded. Any other failure
+  transcribes with Apple on this Mac instead, and the transcript note says why.
 
 The OpenAI bearer is either the ChatGPT sign-in of the Codex CLI or an OpenAI API key.
 For ChatGPT, Reprise starts `codex app-server -c features.plugins=false` with the same
@@ -266,7 +290,7 @@ key is read from the login keychain item `local.aria.reprise.api-key` / `openai`
 Any failure, including a missing account, transcribes with Apple on this Mac instead, and
 the transcript note says why.
 
-**Speaker labels** use SpeakerKit's pyannote pipeline from `argmaxinc/speakerkit-coreml`
+**Speaker labels** other than Gemini's use SpeakerKit's pyannote pipeline from `argmaxinc/speakerkit-coreml`
 (CC BY 4.0), downloaded into `Models/speakers`. The whole recording, up to two hours, is
 diarized at 16 kHz. While speakers are labeled, Apple's phrases stay separate; each segment
 takes the voice heard most during it (or one within a second), voices are numbered in

@@ -71,8 +71,8 @@ language; on macOS 26 and later those models download when a language is chosen.
 runs on this Mac after its model downloads once from Hugging Face. Speaker labels are found
 on this Mac by a speaker model downloaded the same way. These models are kept in
 `~/Library/Application Support/Reprise/Models`, and recordings are decoded for them from the
-sealed file without a plaintext copy. OpenAI transcription sends the recording's audio to
-OpenAI (see below). Live captions hear what the Mac plays, without Reprise's own sounds,
+sealed file without a plaintext copy. OpenAI and Gemini transcription send the recording's
+audio to OpenAI or Google (see below). Live captions hear what the Mac plays, without Reprise's own sounds,
 or the microphone, only while they are on; they are shown and never saved, and Reprise's
 own windows, captions included, are left out of screen capture. The meeting assistant
 hears the microphone and what the Mac plays only while its window is open; what it hears is
@@ -94,6 +94,7 @@ and deletion cannot remove copies held by backups or external services.
 | In-app AI search/follow-up | Question, bounded conversation context, selected OCR/transcripts and provenance (including page host and path) to the chosen CLI/provider |
 | Meeting summary | The transcript and meeting title to the chosen provider, in parts that fit its limit |
 | OpenAI transcription, when chosen | The recording's audio, in ten-minute pieces, to OpenAI's Realtime API, with a short-lived session secret made from the ChatGPT sign-in of the Codex CLI or from an OpenAI API key |
+| Gemini transcription, when chosen | The recording's audio, in 20-minute pieces of 32 kbps AAC, to Google: read by the Antigravity CLI with its Google sign-in, or sent inline to the Gemini API with a Gemini API key. Each piece is a private temporary file, deleted when the piece is done |
 | Whisper and speaker models, when chosen | Download requests to Hugging Face; recordings stay on the Mac |
 | Live captions by OpenAI, when chosen | What the Mac plays, or the microphone, while captions are on, streamed to OpenAI's Realtime API with a short-lived session secret made the same way |
 | Live captions on this Mac | Nothing leaves the Mac; speech and translation models download once from Apple |
@@ -121,8 +122,8 @@ OpenAI, Anthropic or Gemini API key, when saved, stays in the login keychain as 
 Key (OpenAI)”, “Reprise API Key (Anthropic)” or “Reprise API Key (Google Gemini)” and is sent
 only to its vendor, in a request header, never in an address. OpenAI requests ask OpenAI not to
 store the response for later retrieval. Google may use what is sent with a Gemini key on its
-free tier to improve its products. Audio leaves the Mac only with OpenAI transcription, OpenAI
-live captions and the meeting assistant listening with OpenAI. The environment variables and
+free tier to improve its products. Audio leaves the Mac only with OpenAI or Gemini
+transcription, OpenAI live captions and the meeting assistant listening with OpenAI. The environment variables and
 token of an MCP server stay in the login keychain as “Reprise MCP Server (name)” and go only to
 that server.
 

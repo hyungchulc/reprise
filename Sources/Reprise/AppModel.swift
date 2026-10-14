@@ -694,13 +694,21 @@ final class AppModel: ObservableObject {
     func transcriptionRequest(_ engine: TranscriptionEngine? = nil) -> TranscriptionRequest {
         TranscriptionRequest(engine: engine ?? preferences.transcriptionEngine, locales: preferences.speechLocales,
                              openAIModel: preferences.openAITranscriptionModel, openAIAccess: preferences.openAIAccess,
-                             whisperModel: preferences.whisperModel, speakerLabels: preferences.speakerLabels, codexPath: codexPath)
+                             whisperModel: preferences.whisperModel, geminiAccess: preferences.geminiAccess,
+                             geminiModel: preferences.geminiTranscriptionModel, speakerLabels: preferences.speakerLabels,
+                             codexPath: codexPath, geminiPath: geminiPath)
     }
 
     /// The Codex chosen in AI & Models, also when another provider answers searches.
     var codexPath: String? {
         let codex = provider.provider == .codex ? provider : providerConfigurations[AIProviderKind.codex.rawValue]
         return codex?.executablePath
+    }
+
+    /// The Antigravity chosen in AI & Models, also when another provider answers searches.
+    var geminiPath: String? {
+        let gemini = provider.provider == .gemini ? provider : providerConfigurations[AIProviderKind.gemini.rawValue]
+        return gemini?.executablePath
     }
 
     func transcribeRecording(with engine: TranscriptionEngine? = nil) async {
@@ -963,6 +971,18 @@ final class AppModel: ObservableObject {
         }
         let path = "'" + codex.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
         openTerminal(name: "Sign-In", lines: "unset OPENAI_API_KEY\n\(path) login\nprintf '\\nReturn to Reprise and choose Check. Press Return to close.\\n'", tool: "Codex")
+    }
+
+    /// Signs Antigravity in with Google for Gemini transcription, or installs it first.
+    func signInToAntigravity() {
+        let configuration = AIProviderConfiguration(provider: .gemini, executablePath: geminiPath)
+        guard let command = ai.loginCommand(configuration: configuration) else {
+            guard let script = AIProviderKind.gemini.installScript else { return }
+            openTerminal(name: "Install", lines: "\(script)\nprintf '\\nWhen it finishes, return to Reprise and choose Check. Press Return to close.\\n'", tool: "Antigravity")
+            return
+        }
+        let path = "'" + command.executable.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        openTerminal(name: "Sign-In", lines: "unset GEMINI_API_KEY\nprintf 'Sign in with Google when asked, then type /quit.\\n\\n'\n\(path)\nprintf '\\nReturn to Reprise and choose Check. Press Return to close.\\n'", tool: "Antigravity")
     }
 
     private func openTerminal(name: String, lines: String, tool: String? = nil) {

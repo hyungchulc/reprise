@@ -39,7 +39,40 @@ final class TranscriptionEngineTests: XCTestCase {
         XCTAssertEqual(WhisperText.clean(" 회의를 시작합니다. "), "회의를 시작합니다.")
     }
 
+    /// Pieces go to Gemini as AAC: an MP4 file for Antigravity, raw AAC for the API.
+    func testGeminiPiecesAreWrittenAsCompressedAudio() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-gemini-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let samples = (0..<48_000).map { Float(sin(Double($0) * 0.2) * 0.3) }
+        for name in ["piece.m4a", "piece.aac"] {
+            let url = folder.appendingPathComponent(name)
+            try GeminiTranscriber.write(samples, sampleRate: 16_000, to: url)
+            let file = try AVAudioFile(forReading: url)
+            XCTAssertEqual(file.fileFormat.sampleRate, 16_000)
+            XCTAssertEqual(Double(file.length) / 16_000, 3, accuracy: 0.2, name)
+        }
+    }
+
     // MARK: Live engines, on request
+
+    /// A short synthetic meeting of two voices through this Mac's Antigravity Google sign-in.
+    @MainActor func testGeminiTranscribesAndLabelsSpeakersWhenRequested() async throws {
+        guard ProcessInfo.processInfo.environment["REPRISE_TEST_GEMINI"] == "1" else { throw XCTSkip("Set REPRISE_TEST_GEMINI=1 to transcribe with Gemini through Antigravity.") }
+        let (recorder, store, moment, root) = try await meeting(voices: [
+            ("Yuna", "안녕하세요. 오늘 회의는 출시 일정에 대한 것입니다. 먼저 디자인 진행 상황을 들어볼게요."),
+            ("Daniel", "Thanks. The design team rebuilt the search screen last week, and we will share it on Monday."),
+            ("Yuna", "좋습니다. 그럼 개발 일정은 어떻게 되나요?"),
+            ("Daniel", "The backend is done on Friday.")])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let start = Date()
+        await recorder.transcribeSaved(moment, request: TranscriptionRequest(engine: .gemini, locales: ["ko-KR", "en-US"], speakerLabels: true))
+        let saved = try await store.moment(id: moment.id)
+        print("Gemini in \(String(format: "%.1f", Date().timeIntervalSince(start))) s:", saved?.transcriptSegments?.map { "\(String(format: "%.1f-%.1f", $0.start, $0.end)) \($0.speaker ?? "-") \($0.text)" } ?? [], saved?.transcriptionNote ?? "")
+        XCTAssertNil(saved?.transcriptionNote, "Gemini fell back or warned")
+        XCTAssertTrue(saved?.text.contains("회의") == true)
+        XCTAssertEqual(SpeakerLabels.speakers(in: saved?.transcriptSegments ?? []).count, 2)
+    }
 
     /// Sends a short synthetic meeting to OpenAI through this Mac's Codex ChatGPT sign-in.
     @MainActor func testOpenAITranscribesASavedMeetingWhenRequested() async throws {

@@ -103,6 +103,16 @@ public enum ProviderAPI {
         return request
     }
 
+    /// Gemini's generateContent with audio sent inline beside the instructions, for transcription.
+    static func geminiAudioRequest(key: String, model: String, system: String, audio: Data, mimeType: String, prompt: String,
+                                   schema: [String: Any]?, timeout: Double) throws -> URLRequest {
+        var request = try geminiRequest(key: key, model: model, system: system, input: prompt, schema: schema, timeout: timeout)
+        guard var body = try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any] else { throw AIProviderError.invalidInput }
+        body["contents"] = [["role": "user", "parts": [["inlineData": ["mimeType": mimeType, "data": audio.base64EncodedString()]], ["text": prompt]]]]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return request
+    }
+
     private static func post(_ address: String, timeout: Double) -> URLRequest {
         var request = URLRequest(url: URL(string: address)!, timeoutInterval: timeout)
         request.httpMethod = "POST"

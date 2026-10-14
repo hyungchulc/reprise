@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0-alpha.6
+
+- **Transcribe with Gemini.** Choose Gemini in Settings > Audio & Meetings, or in Audio >
+  Transcribe With, to have Google's Gemini listen to a meeting recording, with your Google AI
+  plan through the Antigravity CLI or with a Gemini API key. Gemini also tells the voices
+  apart, so recordings up to 20 minutes get speaker labels without the speaker model;
+  longer ones are labeled on this Mac when the speaker model is downloaded. Through
+  Antigravity it takes a few minutes for each 20 minutes of a recording. When Gemini cannot
+  transcribe, Reprise transcribes with Apple on this Mac instead and says why.
+- The Audio menu and the menu bar menu choose the transcription engine.
+
 ## 0.9.0-alpha.5
 
 - **The meeting assistant searches the web.** When a question needs the public web, such
