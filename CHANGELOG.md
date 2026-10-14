@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.8.2-alpha.1
+
+- **Fast mode.** A Fast switch next to the thinking level, and in Settings, for models
+  that have one. Claude uses its `fastMode` setting on Opus 5.5, Opus 5 and Opus 4.8;
+  Anthropic bills it to usage credits even while the plan has usage left. Codex uses
+  the Fast service tier its model catalog lists, such as "2x speed, increased usage".
+  Grok and Cursor switch to the model's `-fast` twin, so their model menus now list
+  each model once. Turning Fast mode on asks first and says what it costs.
+- **Context use.** Each answer shows how much of the model's context window the request
+  filled, as a ring with a percentage, for Claude, Codex, OpenCode and Ollama. Grok,
+  Gemini and Cursor report the tokens but not their window, so only the count shows.
+  Reprise sends the last few turns and fresh excerpts with every question, so a long
+  conversation never fills the window.
+- **Recordings stay in view during search.** The recording panel above the bottom bar
+  stays open while search is open. Choosing a recording in the results opens it there
+  instead of inside the results.
+- **Audio filter switches at once.** Turning on Audio or choosing an app no longer
+  shows the previous screen results until the new list arrives.
+- **Search Only shortcut.** A second shortcut in Settings > General opens just the
+  search box, with no memory view behind it, and leaves the menu bar and Dock in place.
+  Escape or a click elsewhere closes it, and opening a memory from it shows the full
+  view. It has no default; record one to use it.
+
 ## 0.8.1-alpha.4
 
 - Starting screen recording from the memory window keeps the window open. Recording is

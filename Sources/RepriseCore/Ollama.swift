@@ -4,6 +4,8 @@ import Foundation
 /// chat call sends no tool definitions, so the model can only answer.
 public enum Ollama {
     static let base = URL(string: "http://127.0.0.1:11434")!
+    /// The context Reprise asks Ollama for; models default to less, which truncates the evidence.
+    static let contextTokens = 12_288
     /// Small models that fit a 16 GB Mac. EXAONE is LG's Korean-English model.
     public static let suggestedModels: [(id: String, name: String)] = [
         ("exaone3.5:2.4b", "EXAONE 3.5 2.4B, Korean and English, 1.6 GB"),
@@ -46,7 +48,7 @@ public enum Ollama {
         var body: [String: Any] = [
             "model": model, "stream": false, "format": format,
             "messages": [["role": "system", "content": systemPrompt], ["role": "user", "content": String(decoding: input, as: UTF8.self)]],
-            "options": ["temperature": 0.2, "num_ctx": 12_288]
+            "options": ["temperature": 0.2, "num_ctx": contextTokens]
         ]
         // Thinking models answer faster without a hidden reasoning pass; others reject the flag.
         if await capabilities(model).contains("thinking") { body["think"] = false }
@@ -62,7 +64,8 @@ public enum Ollama {
         let usage = UsageEntry(provider: AIProviderKind.ollama.rawValue, model: model,
                                inputTokens: object["prompt_eval_count"] as? Int, outputTokens: object["eval_count"] as? Int,
                                durationSeconds: Date().timeIntervalSince(start))
-        return AIJSONResult(payload: payload, usage: usage)
+        return AIJSONResult(payload: payload, usage: usage,
+                            context: usage.inputTokens.map { AIContextUse(tokens: $0, window: contextTokens) })
     }
 
     /// Downloads a model, reporting the completed fraction when the server knows the size.

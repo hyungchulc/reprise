@@ -105,9 +105,11 @@ final class MemorySearchTests: XCTestCase {
                     text: "Synthetic test record \(index): worked on item \(index) of the sample plan. 합성 테스트 기록 \(index)번: 샘플 계획의 \(index)번 항목을 작업했다."))
             }
             let configuration = AIProviderConfiguration(provider: kind, model: environment["REPRISE_VERIFY_MODEL"] ?? "",
-                                                        reasoningEffort: environment["REPRISE_VERIFY_EFFORT"])
+                                                        reasoningEffort: environment["REPRISE_VERIFY_EFFORT"],
+                                                        fast: environment["REPRISE_VERIFY_FAST"] == "1" ? true : nil)
             let result = try await MemorySearch(store: store, client: AIClient()).search(question: question, configuration: configuration)
             print("ANSWER", result.response.text)
+            print("CONTEXT", result.response.context.map { "\($0.tokens) of \($0.window.map(String.init) ?? "unknown")" } ?? "none")
             return
         }
         let result = try await MemorySearch(store: store, client: AIClient()).search(question: "What was the validation code for Project Marigold?", configuration: AIProviderConfiguration(provider: kind))

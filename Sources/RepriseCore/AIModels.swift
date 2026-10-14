@@ -3,6 +3,8 @@ import Foundation
 public struct AIModelOption: Identifiable, Equatable, Sendable {
     public let id: String
     public let name: String
+    /// The model the CLI uses when Reprise names none, when its list marks one.
+    public var isDefault = false
 }
 
 /// Models that differ only in thinking level or speed, as Gemini and Cursor list them
@@ -66,6 +68,21 @@ public struct AIModelFamily: Identifiable, Equatable, Sendable {
     /// unnamed or medium model, else its first.
     public func model(keeping level: String) -> String {
         model(for: level) ?? model(for: "") ?? model(for: "medium") ?? levels[0].model
+    }
+
+    /// The listed model that is the same model at the other speed. Providers that name speed in
+    /// the model put `-fast` at the end, sometimes after a build name (`grok-4.7` and
+    /// `grok-4.7-build-fast`), so the closest listed name wins.
+    public static func speedCounterpart(of id: String, fast: Bool, in ids: [String]) -> String? {
+        if fast {
+            guard !id.hasSuffix("-fast") else { return nil }
+            if ids.contains(id + "-fast") { return id + "-fast" }
+            return ids.filter { $0.hasSuffix("-fast") && $0.dropLast(5).hasPrefix(id + "-") }.min { $0.count < $1.count }
+        }
+        guard id.hasSuffix("-fast") else { return nil }
+        let base = String(id.dropLast(5))
+        if ids.contains(base) { return base }
+        return ids.filter { !$0.hasSuffix("-fast") && base.hasPrefix($0 + "-") }.max { $0.count < $1.count }
     }
 
     public static func label(_ level: String) -> String {
@@ -150,7 +167,8 @@ public extension AIClient {
             guard parts.count >= 2, ["-", "*"].contains(String(parts[0])) else { return nil }
             let id = String(parts[1])
             guard id.hasPrefix("grok-"), AICommand.validModel(id), found.insert(id).inserted else { return nil }
-            return AIModelOption(id: id, name: id)
+            // `*` marks the model the CLI uses by default.
+            return AIModelOption(id: id, name: id, isDefault: parts[0] == "*")
         }
     }
 

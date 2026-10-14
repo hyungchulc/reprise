@@ -19,7 +19,6 @@ struct MemoryExplorerView: View {
     @State private var searchFocused = false
     @StateObject private var audio = MemoryAudioPlayer()
     @State private var transcriptExpanded = true
-    @State private var expandedAudioID: String?
     @State private var pan = CGSize.zero
     @GestureState private var dragPan = CGSize.zero
     @State private var resultHeight: CGFloat = 100
@@ -45,38 +44,12 @@ struct MemoryExplorerView: View {
         GeometryReader { geometry in
             ZStack {
                 Color.clear.contentShape(Rectangle())
-                    .onTapGesture { searchFocused = false; calendarOpen = false }
-                memoryCanvas(size: geometry.size)
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    Rectangle().fill(.regularMaterial)
-                        .overlay(alignment: .bottom) {
-                            LinearGradient(colors: [.clear, .black.opacity(0.1)], startPoint: .top, endPoint: .bottom)
-                        }
-                        .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black.opacity(0.45), location: 0.4), .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom))
-                        .frame(height: 210)
-                }.allowsHitTesting(false)
-                VStack {
-                    topControls.excludesMemoryScrolling().padding(.horizontal, 18).padding(.top, topInset)
-                    MeetingPrompt(model: model, detector: model.meetingDetector, recorder: model.meeting).excludesMemoryScrolling().padding(.top, 12)
-                    Spacer()
-                }
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    if let moment = model.selection, moment.kind == "meeting", !searchExpanded {
-                        MemoryAudioPanel(moment: moment, audio: audio, recorder: model.meeting, transcriptExpanded: $transcriptExpanded,
-                                         transcriptHeight: min(240, max(80, geometry.size.height - 450)),
-                                         summary: model.summaries[moment.id], summarizing: model.summarizing.contains(moment.id),
-                                         summaryError: model.summaryErrors[moment.id], providerName: model.provider.provider.displayName,
-                                         onSummarize: { Task { await model.summarize(moment) } },
-                                         onTranscribe: { Task { await model.transcribeSelected() } })
-                            .frame(width: min(780, geometry.size.width - 48))
-                            .excludesMemoryScrolling().padding(.bottom, 12)
+                    .onTapGesture {
+                        // With only the search box showing, a click elsewhere closes it.
+                        if model.searchOnly { NotificationCenter.default.post(name: .repriseCloseMemory, object: nil) }
+                        else { searchFocused = false; calendarOpen = false }
                     }
-                    bottomControls.excludesMemoryScrolling()
-                    MemoryTimeRail(model: model, referenceDate: model.timelineDate ?? model.selection?.timestamp ?? jumpDate,
-                        onOpenRecording: { id in expandedAudioID = id; transcriptExpanded = true; searchFocused = false })
-                }
+                if !model.searchOnly { memoryView(geometry) }
                 if searchExpanded {
                     VStack(spacing: 10) {
                         if showsHistory { recentSearches.frame(height: 32) }
@@ -87,7 +60,7 @@ struct MemoryExplorerView: View {
                         .position(x: geometry.size.width / 2, y: geometry.size.height / 2 - (showsHistory ? 21 : 0))
                         .transition(.opacity.combined(with: .scale(scale: 0.97)))
                 }
-                if showText {
+                if showText && !model.searchOnly {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack { Text("Screen Text").font(.headline); Spacer(); Button { showText = false } label: { Image(systemName: "xmark") }.buttonStyle(.borderless) }
                         ScrollView { Text(model.selection?.text ?? "").textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
@@ -97,7 +70,7 @@ struct MemoryExplorerView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing).padding(.trailing, 20)
                 }
             }.coordinateSpace(name: "memoryExplorer")
-                .background(MemoryTimelineScrollInput(excludedRects: scrollExclusions, onScroll: model.scrollTimeline))
+                .background { if !model.searchOnly { MemoryTimelineScrollInput(excludedRects: scrollExclusions, onScroll: model.scrollTimeline) } }
                 .onPreferenceChange(MemoryScrollExclusions.self) { scrollExclusions = $0 }
                 .clipped().overlay {
                 if model.preferences.edgeGlow != false && (model.asking || openingGlow) {
@@ -121,14 +94,12 @@ struct MemoryExplorerView: View {
         }
         .onChange(of: model.selection?.id) { _, _ in
             pan = .zero; transcriptExpanded = true; showText = false
-            if model.selection?.kind == "meeting" {
-                playing = false
-                if searchExpanded { expandedAudioID = model.selection?.id }
-            }
-            else { expandedAudioID = nil }
+            if model.selection?.kind == "meeting" { playing = false }
         }
         .onChange(of: searchExpanded) { _, expanded in
-            if !expanded { searchFocused = false; audio.pause() }
+            if !expanded { searchFocused = false }
+            // Minimizing or Escape closes the search box when nothing else is showing.
+            if !expanded, model.searchOnly { NotificationCenter.default.post(name: .repriseCloseMemory, object: nil) }
         }
         .task(id: model.selection?.id) { await audio.load(moment: model.selection, root: model.root, cipher: model.cipher) }
         .onDisappear { audio.unload() }
@@ -164,6 +135,42 @@ struct MemoryExplorerView: View {
                 guard let selected = model.selection, model.moments.first?.id != selected.id else { playing = false; return }
                 model.step(-1)
             }
+        }
+    }
+
+    /// The memory itself with its controls: everything but the search box.
+    @ViewBuilder private func memoryView(_ geometry: GeometryProxy) -> some View {
+        memoryCanvas(size: geometry.size)
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            Rectangle().fill(.regularMaterial)
+                .overlay(alignment: .bottom) {
+                    LinearGradient(colors: [.clear, .black.opacity(0.1)], startPoint: .top, endPoint: .bottom)
+                }
+                .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black.opacity(0.45), location: 0.4), .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom))
+                .frame(height: 210)
+        }.allowsHitTesting(false)
+        VStack {
+            topControls.excludesMemoryScrolling().padding(.horizontal, 18).padding(.top, topInset)
+            MeetingPrompt(model: model, detector: model.meetingDetector, recorder: model.meeting).excludesMemoryScrolling().padding(.top, 12)
+            Spacer()
+        }
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            // The recording stays in view above the bar while search is open, too.
+            if let moment = model.selection, moment.kind == "meeting" {
+                MemoryAudioPanel(moment: moment, audio: audio, recorder: model.meeting, transcriptExpanded: $transcriptExpanded,
+                                 transcriptHeight: min(240, max(80, geometry.size.height - 450)),
+                                 summary: model.summaries[moment.id], summarizing: model.summarizing.contains(moment.id),
+                                 summaryError: model.summaryErrors[moment.id], providerName: model.provider.provider.displayName,
+                                 onSummarize: { Task { await model.summarize(moment) } },
+                                 onTranscribe: { Task { await model.transcribeSelected() } })
+                    .frame(width: min(780, geometry.size.width - 48))
+                    .excludesMemoryScrolling().padding(.bottom, 12)
+            }
+            bottomControls.excludesMemoryScrolling()
+            MemoryTimeRail(model: model, referenceDate: model.timelineDate ?? model.selection?.timestamp ?? jumpDate,
+                onOpenRecording: { _ in transcriptExpanded = true; searchFocused = false })
         }
     }
 
@@ -216,7 +223,7 @@ struct MemoryExplorerView: View {
                             if let date = model.restoredSearchDate {
                                 Label("Saved", systemImage: "clock.arrow.circlepath").repriseFont(.caption).foregroundStyle(.secondary).help(date.formatted())
                             }
-                            Button { model.startNewSearch(); expandedAudioID = nil; audio.pause(); searchFocused = true } label: {
+                            Button { model.startNewSearch(); searchFocused = true } label: {
                                 Image(systemName: "square.and.pencil")
                             }.buttonStyle(.plain).help("New search").accessibilityLabel("New search")
                         }
@@ -238,32 +245,27 @@ struct MemoryExplorerView: View {
                     }
                     if let message = model.searchNotice { Text(message).repriseFont(.caption).foregroundStyle(.secondary) }
                     if !model.asking {
-                        if let moment = model.selection, moment.kind == "meeting", expandedAudioID == moment.id,
-                           !model.displayedMatches.contains(where: { $0.id == moment.id }) {
-                            inlineAudio(moment)
-                        }
                         if !model.displayedMatches.isEmpty {
                             Text(model.response == nil ? matchCountLabel : "\(model.displayedMatches.count) supporting memories").repriseFont(.caption).foregroundStyle(.secondary)
                             ForEach(model.displayedMatches.filter { $0.kind == "meeting" }) { moment in
-                                if expandedAudioID == moment.id, model.selection?.id == moment.id {
-                                    inlineAudio(model.selection ?? moment)
-                                } else {
-                                    Button {
-                                        expandedAudioID = moment.id; transcriptExpanded = true; searchFocused = false
-                                        Task { await model.openMatch(moment) }
-                                    } label: {
-                                        HStack(spacing: 12) {
-                                            Image(systemName: "waveform").font(.system(size: 24)).foregroundStyle(Color.accentColor).frame(width: 36)
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                Text(moment.windowTitle.isEmpty ? "Recording" : moment.windowTitle).repriseFont(.heading).lineLimit(1)
-                                                Text(moment.timestamp, format: .dateTime.month(.abbreviated).day().hour().minute()).repriseFont(.caption).foregroundStyle(.secondary)
-                                            }
-                                            Spacer()
-                                            if let duration = moment.audioDuration { Text(MemoryAudioPanel.timestamp(duration)).monospacedDigit().repriseFont(.caption) }
-                                            Image(systemName: "chevron.down").foregroundStyle(.secondary)
-                                        }.padding(.vertical, 8).contentShape(Rectangle())
-                                    }.buttonStyle(.plain).accessibilityLabel("Open recording: \(moment.windowTitle)")
-                                }
+                                // The chosen recording opens in the panel above the bottom bar.
+                                let open = model.selection?.id == moment.id
+                                Button {
+                                    transcriptExpanded = true; searchFocused = false
+                                    Task { await model.openMatch(moment) }
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "waveform").font(.system(size: 24)).foregroundStyle(Color.accentColor).frame(width: 36)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(moment.windowTitle.isEmpty ? "Recording" : moment.windowTitle).repriseFont(.heading).lineLimit(1)
+                                            Text(moment.timestamp, format: .dateTime.month(.abbreviated).day().hour().minute()).repriseFont(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        if let duration = moment.audioDuration { Text(MemoryAudioPanel.timestamp(duration)).monospacedDigit().repriseFont(.caption) }
+                                        Image(systemName: open ? "speaker.wave.2.fill" : "chevron.right").foregroundStyle(open ? Color.accentColor : .secondary)
+                                    }.padding(.vertical, 8).padding(.horizontal, open ? 8 : 0).contentShape(Rectangle())
+                                        .background(open ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                                }.buttonStyle(.plain).accessibilityLabel(open ? "Open below: \(moment.windowTitle)" : "Open recording: \(moment.windowTitle)")
                                 Divider()
                             }
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 14) {
@@ -333,6 +335,7 @@ struct MemoryExplorerView: View {
                         Label(model.thinkingChoices.first { $0.id == model.thinkingChoice }?.name ?? "Thinking", systemImage: "brain")
                     }.fixedSize().help("Thinking level")
                 }
+                if model.fastAvailable { FastModeSwitch(model: model, compact: true).fixedSize() }
                 Button { searchExpanded = false; searchFocused = false } label: { Image(systemName: "chevron.down") }.help("Minimize search")
             }.repriseFont(.caption).buttonStyle(.borderless).padding(.horizontal, 16).padding(.bottom, 11)
         }.modifier(GlassSurface())
@@ -357,6 +360,7 @@ struct MemoryExplorerView: View {
                 Image(systemName: "sparkles")
                 Text(turn.response.usage.provider.capitalized)
                 Text(turn.response.usage.model).foregroundStyle(.secondary).lineLimit(1)
+                if let context = turn.response.context { ContextRing(context: context).padding(.leading, 4) }
             }.repriseFont(.caption).foregroundStyle(Color.accentColor)
             if let coverage = turn.response.coverage {
                 HStack(spacing: 4) {
@@ -372,20 +376,11 @@ struct MemoryExplorerView: View {
                     guard url.scheme == "reprise", let citation = turn.response.citations.first(where: { $0.momentID == url.lastPathComponent }) else { return .discarded }
                     Task {
                         await model.openCitation(citation.momentID)
-                        if model.selection?.kind == "meeting" { expandedAudioID = model.selection?.id; transcriptExpanded = true }
+                        if model.selection?.kind == "meeting" { transcriptExpanded = true }
                     }
                     return .handled
                 })
         }
-    }
-
-    private func inlineAudio(_ moment: Moment) -> some View {
-        MemoryAudioPanel(moment: moment, audio: audio, recorder: model.meeting, transcriptExpanded: $transcriptExpanded,
-            transcriptHeight: 140, framed: false, summary: model.summaries[moment.id], summarizing: model.summarizing.contains(moment.id),
-            summaryError: model.summaryErrors[moment.id], providerName: model.provider.provider.displayName,
-            onSummarize: { Task { await model.summarize(moment) } }, onTranscribe: { Task { await model.transcribeSelected() } },
-            onClose: { expandedAudioID = nil; audio.pause() })
-            .task(id: moment.id) { await model.loadSummary(for: moment.id) }
     }
 
     private var recentSearches: some View {

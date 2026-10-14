@@ -23,15 +23,33 @@ enum CodexAnswerCatalog {
     return slug
   }
 
-  /// Reasoning levels the model lists, lowest first; a blank model means the catalog's default.
-  static func reasoningLevels(model: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [String] {
+  /// The catalog entry for a model; a blank model means the catalog's default.
+  static func entry(model: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [String: Any]? {
     let url = home.appendingPathComponent(".codex/models_cache.json")
     guard (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map({ $0 > 0 && $0 <= 4 * 1024 * 1024 }) == true,
       let cache = try? JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
       let models = cache["models"] as? [[String: Any]],
-      let slug = model.isEmpty ? try? self.model(requested: "") : model,
-      let entry = models.first(where: { $0["slug"] as? String == slug })
-    else { return [] }
+      let slug = model.isEmpty ? try? self.model(requested: "") : model
+    else { return nil }
+    return models.first(where: { $0["slug"] as? String == slug })
+  }
+
+  /// The Fast service tier when the model offers one, with the catalog's own description of its cost.
+  static func fastTier(model: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> (id: String, note: String)? {
+    let tiers = entry(model: model, home: home)?["service_tiers"] as? [[String: Any]] ?? []
+    guard let tier = tiers.first(where: { ($0["name"] as? String)?.lowercased() == "fast" || $0["id"] as? String == "priority" }),
+      let id = tier["id"] as? String, id.count <= 32, id.allSatisfy({ $0.isASCII && ($0.isLetter || $0 == "_" || $0 == "-") })
+    else { return nil }
+    return (id, String((tier["description"] as? String ?? "").prefix(120)))
+  }
+
+  static func contextWindow(model: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Int? {
+    (entry(model: model, home: home)?["context_window"] as? Int).flatMap { $0 > 0 ? $0 : nil }
+  }
+
+  /// Reasoning levels the model lists, lowest first; a blank model means the catalog's default.
+  static func reasoningLevels(model: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [String] {
+    guard let entry = entry(model: model, home: home) else { return [] }
     let levels = (entry["supported_reasoning_levels"] as? [Any] ?? []).compactMap { level -> String? in
       let name = (level as? [String: Any])?["effort"] as? String ?? level as? String
       return name.flatMap { $0.count <= 16 && $0.allSatisfy { $0.isASCII && $0.isLetter } ? $0 : nil }

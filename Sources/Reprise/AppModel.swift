@@ -25,6 +25,10 @@ final class AppModel: ObservableObject {
     let meetingDetector = MeetingDetector()
     let updater = AppUpdater()
     let shortcut = GlobalShortcut()
+    /// Opens only the search box, with nothing behind it. It has no default and stays unset until recorded.
+    let searchOnlyShortcut = GlobalShortcut(storageKey: "searchOnlyShortcut", identifier: 2, standard: nil)
+    /// The overlay shows only the search box until a memory is opened from it.
+    @Published var searchOnly = false
     let speechLanguages = SpeechLanguages()
     let archiver: FrameArchiver
     /// Set while screen recording runs; still set at launch means the last run ended without
@@ -67,6 +71,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var modelFamilies: [AIModelFamily] = []
     /// Thinking levels the provider takes as a flag for the chosen model.
     @Published private(set) var thinkingLevels: [String] = []
+    /// What Fast mode costs when the provider takes it as a setting for the chosen model.
+    @Published private(set) var fastSettingNote: String?
     /// Screens saved before 0.8.1 that are still waiting to have their text read again.
     @Published private(set) var screensToReread = 0
     /// Every memory in the time a quick search names, when only part of it is shown.
@@ -208,7 +214,11 @@ final class AppModel: ObservableObject {
     }
 
     var calendar: Calendar { var value = Calendar.autoupdatingCurrent; value.timeZone = timeZone; return value }
-    var displayedMatches: [Moment] { aiMatches ?? matchingMoments }
+    var displayedMatches: [Moment] {
+        if let aiMatches { return aiMatches }
+        // A filter change applies at once to what is already listed; the refreshed list follows.
+        return matchingMoments.filter { (mode != "meetings" || $0.kind == "meeting") && (appFilter == nil || $0.appName == appFilter) }
+    }
     var query: MomentQuery {
         let range = dayFilter.map { MemoryCalendar.dayRange(containing: $0, calendar: calendar) }
         return MomentQuery(text: search, appName: appFilter, since: range?.lowerBound,
@@ -418,6 +428,7 @@ final class AppModel: ObservableObject {
     }
 
     func openMatch(_ moment: Moment) async {
+        searchOnly = false
         cancelNavigation()
         await showMoment(moment, generation: navigationGeneration)
     }
@@ -529,7 +540,7 @@ final class AppModel: ObservableObject {
     func selectProvider(_ kind: AIProviderKind) {
         providerConfigurations[provider.provider.rawValue] = provider
         provider = providerConfigurations[kind.rawValue] ?? AIProviderConfiguration(provider: kind)
-        providerStatus = nil; accountStatus = nil; availableModels = []; thinkingLevels = []
+        providerStatus = nil; accountStatus = nil; availableModels = []; thinkingLevels = []; fastSettingNote = nil
         cancelAnswer()
         Task { await saveSettings(); await refreshStatus() }
     }
@@ -541,10 +552,12 @@ final class AppModel: ObservableObject {
         let capabilities = await ai.status(configuration: config)
         let account = await ai.accountStatus(configuration: config)
         let options = await ai.models(configuration: config)
-        let levels = await Task.detached { config.provider.thinkingLevels(model: config.model) }.value
+        let (levels, fastNote) = await Task.detached {
+            (config.provider.thinkingLevels(model: config.model), config.provider.fastSettingNote(model: config.model))
+        }.value
         guard config == provider, statusGeneration == token else { return }
         providerStatus = capabilities; accountStatus = account; availableModels = options; checkingProvider = false
-        thinkingLevels = levels
+        thinkingLevels = levels; fastSettingNote = fastNote
     }
 
     // MARK: Model and thinking level
@@ -565,12 +578,18 @@ final class AppModel: ObservableObject {
     }
 
     var modelChoices: [Choice] {
-        levelsInModel ? modelFamilies.map { Choice(id: $0.id, name: $0.name) } : availableModels.map { Choice(id: $0.id, name: $0.name) }
+        let all = levelsInModel ? modelFamilies.map { Choice(id: $0.id, name: $0.name) } : availableModels.map { Choice(id: $0.id, name: $0.name) }
+        guard fastInModel else { return all }
+        // A Fast twin is chosen with the Fast switch instead of being listed twice.
+        let ids = all.map(\.id)
+        return all.filter { AIModelFamily.speedCounterpart(of: $0.id, fast: false, in: ids) == nil }
     }
     /// "" while the provider's default is in use.
     var modelChoice: String {
         guard !provider.model.isEmpty else { return "" }
-        return levelsInModel ? AIModelFamily.split(provider.model).family : provider.model
+        let id = levelsInModel ? AIModelFamily.split(provider.model).family : provider.model
+        if fastInModel, let base = AIModelFamily.speedCounterpart(of: id, fast: false, in: speedIDs) { return base }
+        return id
     }
     /// A saved or custom model the provider's list does not show, or not yet while it loads.
     var modelChoiceUnlisted: Bool { !modelChoice.isEmpty && !modelChoices.contains { $0.id == modelChoice } }
@@ -594,10 +613,12 @@ final class AppModel: ObservableObject {
 
     func chooseModel(_ id: String) {
         guard id != modelChoice else { return }
+        // A model with a Fast twin keeps the speed already chosen.
+        let speed = fastInModel && fastOn && !id.isEmpty ? AIModelFamily.speedCounterpart(of: id, fast: true, in: speedIDs) : nil
         if id.isEmpty { provider.model = "" }
-        else if levelsInModel, let family = modelFamilies.first(where: { $0.id == id }) {
+        else if levelsInModel, let family = modelFamilies.first(where: { $0.id == (speed ?? id) }) {
             provider.model = family.model(keeping: AIModelFamily.split(effectiveModel).level)
-        } else { provider.model = id }
+        } else { provider.model = speed ?? id }
         providerChoiceChanged()
     }
 
@@ -622,12 +643,52 @@ final class AppModel: ObservableObject {
         providerChoiceChanged()
     }
 
+    // MARK: Fast mode
+
+    /// Grok and Cursor list Fast as its own model; Claude and Codex take it as a setting.
+    private var fastInModel: Bool { [.grok, .cursor].contains(provider.provider) }
+    /// What a Fast twin is looked up in: model families for Cursor, models for Grok.
+    private var speedIDs: [String] { levelsInModel ? modelFamilies.map(\.id) : availableModels.map(\.id) }
+    /// The listed model in use, Grok's own default included.
+    private var speedModel: String {
+        if provider.model.isEmpty, provider.provider == .grok { return availableModels.first { $0.isDefault }?.id ?? "" }
+        return levelsInModel ? AIModelFamily.split(effectiveModel).family : effectiveModel
+    }
+    /// The model that is the chosen one at the other speed, for Grok and Cursor.
+    private func speedSwitch(toFast fast: Bool) -> String? {
+        guard fastInModel, !speedModel.isEmpty,
+              let twin = AIModelFamily.speedCounterpart(of: speedModel, fast: fast, in: speedIDs) else { return nil }
+        guard levelsInModel else { return twin }
+        return modelFamilies.first { $0.id == twin }?.model(keeping: AIModelFamily.split(effectiveModel).level)
+    }
+
+    var fastOn: Bool { fastInModel ? speedModel.hasSuffix("-fast") : provider.fast == true && fastSettingNote != nil }
+    var fastAvailable: Bool { fastInModel ? speedSwitch(toFast: !fastOn) != nil : fastSettingNote != nil }
+    /// What the confirmation says before Fast mode is turned on.
+    var fastWarning: String {
+        if let fastSettingNote { return fastSettingNote }
+        let twin = speedSwitch(toFast: true) ?? ""
+        let name = availableModels.first { $0.id == twin }?.name ?? twin
+        return "Switches to \(name). Fast models answer sooner and use your plan's limits faster."
+    }
+
+    func setFast(_ on: Bool) {
+        guard on != fastOn, fastAvailable else { return }
+        if fastInModel {
+            guard let model = speedSwitch(toFast: on) else { return }
+            provider.model = model
+        } else { provider.fast = on ? true : nil }
+        providerChoiceChanged()
+    }
+
     private func providerChoiceChanged() {
         let config = provider
         Task {
             await saveSettings()
-            let levels = await Task.detached { config.provider.thinkingLevels(model: config.model) }.value
-            if config == provider { thinkingLevels = levels }
+            let (levels, fastNote) = await Task.detached {
+                (config.provider.thinkingLevels(model: config.model), config.provider.fastSettingNote(model: config.model))
+            }.value
+            if config == provider { thinkingLevels = levels; fastSettingNote = fastNote }
         }
     }
 
@@ -760,6 +821,7 @@ final class AppModel: ObservableObject {
     }
 
     func openMemory(id: String) async {
+        searchOnly = false
         searchPresented = false
         NotificationCenter.default.post(name: .repriseOpenMemory, object: nil)
         await openCitation(id)

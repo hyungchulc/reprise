@@ -49,11 +49,14 @@ public struct AIProviderConfiguration: Codable, Equatable, Sendable {
     public var timeoutSeconds: Double
     /// The chosen thinking level for providers that take one as a flag; nil keeps Reprise's.
     public var reasoningEffort: String?
+    /// Fast mode for providers that take it as a setting (Claude, Codex). Grok and Cursor name it
+    /// in the model instead. It uses plan limits faster, and Claude's draws on usage credits.
+    public var fast: Bool?
     public init(provider: AIProviderKind = .claude, model: String = "", executablePath: String? = nil, timeoutSeconds: Double = 90,
-                reasoningEffort: String? = nil) {
+                reasoningEffort: String? = nil, fast: Bool? = nil) {
         self.provider = provider; self.model = model
         self.executablePath = executablePath; self.timeoutSeconds = timeoutSeconds
-        self.reasoningEffort = reasoningEffort
+        self.reasoningEffort = reasoningEffort; self.fast = fast
     }
 
     /// The level sent to the CLI: the chosen one when the model takes it, otherwise high, or the
@@ -64,9 +67,29 @@ public struct AIProviderConfiguration: Codable, Equatable, Sendable {
         if let reasoningEffort, levels.contains(reasoningEffort) { return reasoningEffort }
         return levels.contains("high") ? "high" : levels.last
     }
+
+    /// Fast mode as a setting, only for a model that has it: Claude would otherwise switch models.
+    var fastSetting: Bool { fast == true && provider.fastSettingNote(model: model) != nil }
 }
 
 public extension AIProviderKind {
+    /// What Fast mode costs when the provider takes it as a setting for this model, or nil when it
+    /// does not. Grok and Cursor list Fast as its own model instead.
+    func fastSettingNote(model: String) -> String? {
+        switch self {
+        case .claude:
+            // Fast mode runs on Opus 5.5, Opus 5 and Opus 4.8 only.
+            let id = model.lowercased()
+            guard id == "opus" || ["claude-opus-5", "claude-opus-4-8"].contains(where: id.hasPrefix) else { return nil }
+            return "Anthropic bills Claude Fast mode to your usage credits at a higher rate, even while your plan has usage left. Usage credits must be turned on for your account."
+        case .codex:
+            guard let tier = CodexAnswerCatalog.fastTier(model: model) else { return nil }
+            let note = tier.note.isEmpty ? "Faster answers" : tier.note.prefix(1).uppercased() + tier.note.dropFirst()
+            return "\(note). Fast mode uses your ChatGPT plan's limits faster."
+        default: return nil
+        }
+    }
+
     /// Thinking levels a provider's CLI takes as a flag, lowest first. Gemini and Cursor name the
     /// level in the model instead (see `AIModelFamily`); the rest have none.
     func thinkingLevels(model: String) -> [String] {
@@ -99,10 +122,20 @@ public struct AIResponse: Codable, Equatable, Sendable {
     public let citations: [AICitation]
     public let usage: UsageEntry
     public let coverage: MemorySearchCoverage?
+    /// How much of the model's context the answering request filled, when the provider says.
+    public let context: AIContextUse?
 
-    public init(text: String, citations: [AICitation], usage: UsageEntry, coverage: MemorySearchCoverage? = nil) {
-        self.text = text; self.citations = citations; self.usage = usage; self.coverage = coverage
+    public init(text: String, citations: [AICitation], usage: UsageEntry, coverage: MemorySearchCoverage? = nil, context: AIContextUse? = nil) {
+        self.text = text; self.citations = citations; self.usage = usage; self.coverage = coverage; self.context = context
     }
+}
+
+/// Tokens a request sent, cached ones included, and the model's context window when known.
+public struct AIContextUse: Codable, Equatable, Sendable {
+    public let tokens: Int
+    public let window: Int?
+    public init(tokens: Int, window: Int?) { self.tokens = tokens; self.window = window }
+    public var fraction: Double? { window.map { $0 > 0 ? min(1, Double(tokens) / Double($0)) : 0 } }
 }
 
 public enum AIProviderError: Error, LocalizedError, Equatable {
@@ -231,8 +264,18 @@ public actor AIClient {
                let result = object["result"] as? String, result.lowercased().contains("not logged in") { throw AIProviderError.authenticationRequired }
             throw AIProviderError.processFailed(output.exitCode)
         }
-        return try AIResponseParser.structured(output.stdout, provider: configuration.provider,
-                                              requestedModel: configuration.model, duration: Date().timeIntervalSince(start))
+        var result = try AIResponseParser.structured(output.stdout, provider: configuration.provider,
+                                                     requestedModel: configuration.model, duration: Date().timeIntervalSince(start))
+        // Codex and OpenCode report tokens but not the window; their model catalogs list it.
+        if let context = result.context, context.window == nil {
+            let window: Int? = switch configuration.provider {
+            case .codex: CodexAnswerCatalog.contextWindow(model: configuration.model)
+            case .opencode: AICommand.openCodeWindow(model: configuration.model.isEmpty ? AICommand.openCodeDefaultModel : configuration.model)
+            default: nil
+            }
+            result.context = AIContextUse(tokens: context.tokens, window: window)
+        }
+        return result
     }
 }
 
@@ -288,7 +331,8 @@ enum AICommand {
                     "--effort", configuration.thinking ?? "high", "--safe-mode", "--restricted", "--tools", "",
                     "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}", "--no-session-persistence",
                     "--disable-slash-commands", "--no-chrome", "--permission-mode", "dontAsk",
-                    "--settings", "{\"disableAllHooks\":true}", "--system-prompt", systemPrompt]
+                    "--settings", configuration.fastSetting ? "{\"disableAllHooks\":true,\"fastMode\":true}" : "{\"disableAllHooks\":true}",
+                    "--system-prompt", systemPrompt]
         case .codex:
             args = ["exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",
                     "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never"]
@@ -299,6 +343,10 @@ enum AICommand {
                      "-c", "tools.experimental_request_user_input.enabled=false", "-c", "agents.enabled=false",
                      "-c", "skills.include_instructions=false", "-c", "skills.bundled.enabled=false",
                      "-c", "project_doc_max_bytes=0", "-c", "developer_instructions=\(tomlString(systemPrompt))"]
+            // The catalog lists Fast as the "priority" service tier on models that have it.
+            if configuration.fast == true, let tier = CodexAnswerCatalog.fastTier(model: configuration.model) {
+                args += ["-c", "service_tier=\"\(tier.id)\""]
+            }
         case .grok:
             args = ["--output-format", "json", "--json-schema", schema, "--tools", "", "--deny", "*",
                     "--disallowed-tools", "search_tool,use_tool,list_mcp_resources,read_mcp_resource",
@@ -388,6 +436,17 @@ enum AICommand {
 
     static var openCodeCache: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("local.aria.reprise/opencode", isDirectory: true)
+    }
+
+    /// The context window Reprise's own copy of OpenCode's catalog lists for a `provider/model` id.
+    static func openCodeWindow(model: String, catalog: URL = openCodeCache.appendingPathComponent("models.json")) -> Int? {
+        let parts = model.split(separator: "/", maxSplits: 1).map(String.init)
+        guard parts.count == 2, (try? catalog.resourceValues(forKeys: [.fileSizeKey]).fileSize).map({ $0 > 0 && $0 <= 32 * 1024 * 1024 }) == true,
+              let object = try? JSONSerialization.jsonObject(with: Data(contentsOf: catalog)) as? [String: Any],
+              let models = (object[parts[0]] as? [String: Any])?["models"] as? [String: Any],
+              let limit = (models[parts[1]] as? [String: Any])?["limit"] as? [String: Any],
+              let window = limit["context"] as? Int, window > 0 else { return nil }
+        return window
     }
 
     static let codexDisabledFeatures = ["shell_tool", "unified_exec", "apps", "plugins", "hooks", "browser_use",
@@ -482,6 +541,7 @@ struct AIEvidenceInput {
 struct AIJSONResult {
     let payload: [String: Any]
     let usage: UsageEntry
+    var context: AIContextUse? = nil
 }
 
 enum AIResponseParser {
@@ -559,7 +619,9 @@ enum AIResponseParser {
                     guard reason == "stop" else { throw reason.contains("tool") ? AIProviderError.toolAttempt : AIProviderError.invalidResponse }
                     answer = streamedText; completed = true
                     if let tokens = part["tokens"] as? [String: Any] {
-                        usage = ["input_tokens": tokens["input"] as Any, "output_tokens": tokens["output"] as Any]
+                        let cache = tokens["cache"] as? [String: Any]
+                        usage = ["input_tokens": tokens["input"] as Any, "output_tokens": tokens["output"] as Any,
+                                 "cache_read_input_tokens": cache?["read"] as Any, "cache_creation_input_tokens": cache?["write"] as Any]
                     }
                 }
             } else if type == "result" {
@@ -589,7 +651,12 @@ enum AIResponseParser {
         let entry = UsageEntry(provider: provider.rawValue, model: servedModel ?? (requestedModel.isEmpty ? "auto" : requestedModel),
             inputTokens: incomplete ? nil : token(usage?["input_tokens"]), outputTokens: incomplete ? nil : token(usage?["output_tokens"]),
             costUSD: partialCost ? nil : cost(result?["total_cost_usd"]), durationSeconds: max(0, duration))
-        return AIJSONResult(payload: payload, usage: entry)
+        // Claude counts cached prompt tokens apart from input tokens; all of them fill the context.
+        let sent = incomplete ? nil : token(usage?["input_tokens"]).map {
+            $0 + (token(usage?["cache_creation_input_tokens"]) ?? 0) + (token(usage?["cache_read_input_tokens"]) ?? 0)
+        }
+        let window = (result?["modelUsage"] as? [String: Any])?.values.lazy.compactMap { ($0 as? [String: Any])?["contextWindow"] }.compactMap(token).first
+        return AIJSONResult(payload: payload, usage: entry, context: sent.map { AIContextUse(tokens: $0, window: window) })
     }
 
     /// The JSON object a model returned, also when a CLI without schema enforcement wraps it in
@@ -647,7 +714,7 @@ enum AIResponseParser {
         var seen = Set<String>()
         let used = (listedLabels + inlineLabels).filter { supplied[$0] != nil && seen.insert($0).inserted }.compactMap { supplied[$0] }
         if used.isEmpty, citesInline || !listedLabels.isEmpty { throw AIProviderError.invalidCitation }
-        return AIResponse(text: text as String, citations: used, usage: result.usage)
+        return AIResponse(text: text as String, citations: used, usage: result.usage, context: result.context)
     }
 
     /// Evidence labels in a model's spelling ("M3", "[m03]", "M3, M4"), as the labels Reprise supplied.

@@ -25,10 +25,10 @@ public struct SavedSearchResult: Codable, Equatable, Sendable {
             if let moment = try await store.moment(id: id) { loaded[id] = moment }
         }
         let available = Set(loaded.keys)
-        let restored = AIResponse(text: response.text, citations: response.citations.filter { available.contains($0.momentID) }, usage: response.usage, coverage: response.coverage)
+        let restored = AIResponse(text: response.text, citations: response.citations.filter { available.contains($0.momentID) }, usage: response.usage, coverage: response.coverage, context: response.context)
         let restoredTurns = (turns ?? []).map { turn in
             MemorySearchTurn(question: turn.question, response: AIResponse(text: turn.response.text,
-                citations: turn.response.citations.filter { available.contains($0.momentID) }, usage: turn.response.usage, coverage: turn.response.coverage), id: turn.id)
+                citations: turn.response.citations.filter { available.contains($0.momentID) }, usage: turn.response.usage, coverage: turn.response.coverage, context: turn.response.context), id: turn.id)
         }
         return (restored, momentIDs.compactMap { loaded[$0] }, restoredTurns, ids.count - loaded.count)
     }

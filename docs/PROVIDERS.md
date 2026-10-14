@@ -65,6 +65,15 @@ Cursor name the level in the model identifier, so the search bar and Settings gr
 their models into families and choose the level within one. OpenCode, Ollama and Apple
 have no level to choose.
 
+Fast mode appears only for a model that has it, and turning it on asks first. Claude
+receives `"fastMode":true` in its `--settings` JSON, only for Opus 5.5, Opus 5 and Opus
+4.8, since the CLI otherwise switches to a model that has it; Anthropic bills Fast mode
+to usage credits even while the plan has usage left. Codex receives
+`service_tier="priority"` when its model catalog lists that tier for the model; the CLI
+refuses a tier the catalog does not advertise. Grok and Cursor list Fast models of their
+own (`grok-4.7` and `grok-4.7-build-fast`, `composer-2.5` and `composer-2.5-fast`), so
+the switch chooses the listed twin by name and the model menus show each model once.
+
 Claude runs with `--print --output-format json --safe-mode --restricted --tools ""`,
 an explicit answer/citations JSON schema, the chosen `--effort` level,
 an empty strict MCP configuration, disabled slash commands, no Chrome integration,
@@ -295,6 +304,13 @@ or string token values remain nil. No quota, paid entitlement, or token estimate
 is inferred. A provider-emitted cost is telemetry, often an API-equivalent
 estimate; it is not proof of an additional subscription charge. CLI-reported
 served model is preferred; otherwise the requested alias or `auto` is recorded.
+
+Each answer also keeps the tokens its request sent, cached prompt tokens included, and
+the model's context window where one is known: Claude reports it with the result,
+Codex's model catalog and Reprise's own copy of OpenCode's catalog list it, and Ollama
+runs with the 12,288-token window Reprise asks for. Grok keeps the window only in a
+cache file beside account details, which Reprise does not read, and Gemini and Cursor
+do not report one, so those answers show the token count alone.
 
 ## Process bounds and verification
 

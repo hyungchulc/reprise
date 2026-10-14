@@ -72,6 +72,48 @@ final class QuickSearchTimeTests: XCTestCase {
         XCTAssertTrue(AICommand.arguments(configuration: AIProviderConfiguration(provider: .codex)).contains { $0.hasPrefix("model_reasoning_effort=") })
     }
 
+    func testFastTwinsAreFoundByName() {
+        let grok = ["grok-4.6", "grok-4.5", "grok-4.7", "grok-4.7-build-fast"]
+        XCTAssertEqual(AIModelFamily.speedCounterpart(of: "grok-4.7", fast: true, in: grok), "grok-4.7-build-fast")
+        XCTAssertEqual(AIModelFamily.speedCounterpart(of: "grok-4.7-build-fast", fast: false, in: grok), "grok-4.7")
+        XCTAssertNil(AIModelFamily.speedCounterpart(of: "grok-4.6", fast: true, in: grok))
+        let cursor = ["grok-4.7", "grok-4.7-fast", "composer-2.5", "composer-2.5-fast", "cursor-grok-4.5-fast"]
+        XCTAssertEqual(AIModelFamily.speedCounterpart(of: "composer-2.5", fast: true, in: cursor), "composer-2.5-fast")
+        XCTAssertEqual(AIModelFamily.speedCounterpart(of: "grok-4.7-fast", fast: false, in: cursor), "grok-4.7")
+        XCTAssertNil(AIModelFamily.speedCounterpart(of: "cursor-grok-4.5-fast", fast: false, in: cursor))
+        let listed = AIClient.grokModels("Available models:\n  - grok-4.7\n  * grok-4.7-build-fast (default)\n")
+        XCTAssertEqual(listed.map(\.isDefault), [false, true])
+    }
+
+    func testFastModeReachesClaudeOnlyOnOpus() {
+        func settings(_ configuration: AIProviderConfiguration) -> String? {
+            let args = AICommand.arguments(configuration: configuration)
+            return args.firstIndex(of: "--settings").map { args[$0 + 1] }
+        }
+        XCTAssertEqual(settings(AIProviderConfiguration(model: "opus", fast: true)), #"{"disableAllHooks":true,"fastMode":true}"#)
+        XCTAssertEqual(settings(AIProviderConfiguration(model: "sonnet", fast: true)), #"{"disableAllHooks":true}"#)
+        XCTAssertEqual(settings(AIProviderConfiguration(model: "opus")), #"{"disableAllHooks":true}"#)
+    }
+
+    func testCodexFastTierAndWindowComeFromItsCatalog() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-codex-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        let catalog = #"{"models":[{"slug":"sol","visibility":"list","priority":1,"context_window":500000,"service_tiers":[{"id":"priority","name":"Fast","description":"2x speed, increased usage"}]},{"slug":"plain","visibility":"list","priority":2,"context_window":272000,"service_tiers":[]}]}"#
+        try Data(catalog.utf8).write(to: home.appendingPathComponent(".codex/models_cache.json"))
+        XCTAssertEqual(CodexAnswerCatalog.fastTier(model: "sol", home: home)?.id, "priority")
+        XCTAssertEqual(CodexAnswerCatalog.fastTier(model: "sol", home: home)?.note, "2x speed, increased usage")
+        XCTAssertNil(CodexAnswerCatalog.fastTier(model: "plain", home: home))
+        XCTAssertEqual(CodexAnswerCatalog.contextWindow(model: "plain", home: home), 272000)
+    }
+
+    func testClaudeContextCountsCachedTokens() throws {
+        let data = Data(#"{"type":"result","subtype":"success","is_error":false,"result":"{\"answer\":\"ok\"}","structured_output":{"answer":"ok"},"usage":{"input_tokens":12,"cache_creation_input_tokens":3000,"cache_read_input_tokens":17000,"output_tokens":40},"modelUsage":{"claude-opus-5-5":{"contextWindow":1000000}}}"#.utf8)
+        let parsed = try AIResponseParser.structured(data, provider: .claude, requestedModel: "opus", duration: 1)
+        XCTAssertEqual(parsed.context, AIContextUse(tokens: 20012, window: 1_000_000))
+        XCTAssertEqual(parsed.context?.fraction ?? 0, 0.020012, accuracy: 0.000001)
+    }
+
     func testWideScriptsLeadTextRecognition() {
         XCTAssertEqual(ScreenTextLanguages.hints(["en-US", "ko-KR"]), ["ko-KR", "en-US"])
         XCTAssertEqual(ScreenTextLanguages.hints(["sv-SE", "en-US"]), ["sv-SE", "en-US"])

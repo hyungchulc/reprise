@@ -133,7 +133,7 @@ public actor MemorySearch {
         }
       }
       let parsed = Self.grounded(try AIResponseParser.response(answered, citations: evidence.citations))
-      let response = AIResponse(text: parsed.text, citations: parsed.citations, usage: parsed.usage, coverage: overview?.coverage)
+      let response = AIResponse(text: parsed.text, citations: parsed.citations, usage: parsed.usage, coverage: overview?.coverage, context: parsed.context)
       let byID = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
       let moments = response.citations.compactMap { byID[$0.momentID] }
       return MemorySearchResult(
@@ -145,7 +145,7 @@ public actor MemorySearch {
 
   static func grounded(_ response: AIResponse) -> AIResponse {
     guard response.citations.isEmpty else { return response }
-    return AIResponse(text: "No supporting memories were found in the records searched. Try a more specific phrase or a different date.", citations: [], usage: response.usage)
+    return AIResponse(text: "No supporting memories were found in the records searched. Try a more specific phrase or a different date.", citations: [], usage: response.usage, context: response.context)
   }
 
   func retrieve(plan: MemorySearchPlan, filter: MomentQuery = MomentQuery(), conversation: [MemorySearchTurn] = []) async throws

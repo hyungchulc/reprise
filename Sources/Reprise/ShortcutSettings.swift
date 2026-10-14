@@ -3,12 +3,18 @@ import SwiftUI
 
 struct ShortcutSettings: View {
     @ObservedObject var shortcut: GlobalShortcut
+    var title = "Search Memory"
     var body: some View {
-        LabeledContent("Search Memory") {
+        LabeledContent(title) {
             HStack {
-                ShortcutRecorder(shortcut: shortcut).frame(width: 246, height: 28)
-                Button { shortcut.restoreDefault() } label: { Image(systemName: "arrow.counterclockwise") }
-                    .help("Restore default shortcut")
+                ShortcutRecorder(shortcut: shortcut, title: title).frame(width: 246, height: 28)
+                if shortcut.hasDefault {
+                    Button { shortcut.restoreDefault() } label: { Image(systemName: "arrow.counterclockwise") }
+                        .help("Restore default shortcut")
+                } else {
+                    Button { shortcut.restoreDefault() } label: { Image(systemName: "xmark.circle") }
+                        .help("Remove shortcut").disabled(shortcut.configuration == nil)
+                }
             }
         }.onDisappear { if shortcut.isRecording { shortcut.cancelRecording() } }
         if let error = shortcut.error { Text(error).foregroundStyle(.red).repriseFont(.caption) }
@@ -17,6 +23,7 @@ struct ShortcutSettings: View {
 
 private struct ShortcutRecorder: NSViewRepresentable {
     @ObservedObject var shortcut: GlobalShortcut
+    let title: String
     @Environment(\.repriseTextSize) private var textSize
 
     func makeNSView(context: Context) -> ShortcutRecorderButton {
@@ -25,14 +32,15 @@ private struct ShortcutRecorder: NSViewRepresentable {
         button.target = button
         button.action = #selector(ShortcutRecorderButton.toggleRecording)
         button.bezelStyle = .rounded
-        button.setAccessibilityLabel("Search Memory shortcut")
+        button.setAccessibilityLabel("\(title) shortcut")
         return button
     }
 
     func updateNSView(_ button: ShortcutRecorderButton, context: Context) {
-        button.title = shortcut.isRecording ? "Press shortcut..." : shortcut.configuration.title
+        let current = shortcut.configuration?.title ?? "Record Shortcut"
+        button.title = shortcut.isRecording ? "Press shortcut..." : current
         button.font = .systemFont(ofSize: textSize)
-        button.setAccessibilityValue(shortcut.isRecording ? "Recording shortcut" : shortcut.configuration.title)
+        button.setAccessibilityValue(shortcut.isRecording ? "Recording shortcut" : shortcut.configuration?.title ?? "None")
     }
 }
 

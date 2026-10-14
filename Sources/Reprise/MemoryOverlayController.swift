@@ -54,16 +54,21 @@ final class MemoryOverlayController {
         NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
             .sink { [weak self] _ in self?.restorePresentation() }
             .store(in: &subscriptions)
-        model.$showSettings.combineLatest(model.$showOnboarding).receive(on: RunLoop.main)
-            .sink { [weak self] _, _ in self?.updatePresentation() }
+        model.$showSettings.combineLatest(model.$showOnboarding, model.$searchOnly).receive(on: RunLoop.main)
+            .sink { [weak self] _, _, _ in self?.updatePresentation() }
             .store(in: &subscriptions)
         model.shortcut.onTrigger = { [weak self] in self?.showSearch() }
         model.shortcut.activate()
+        model.searchOnlyShortcut.onTrigger = { [weak self] in self?.showSearch(only: true) }
+        model.searchOnlyShortcut.activate()
         events = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             // Local key equivalents can arrive without Carbon's global hotkey event.
             if event.type == .keyDown, self.model.shortcut.matches(event) {
                 self.showSearch(); return nil
+            }
+            if event.type == .keyDown, self.model.searchOnlyShortcut.matches(event) {
+                self.showSearch(only: true); return nil
             }
             guard event.window === self.panel else { return event }
             if event.type == .keyDown, event.keyCode == 53, self.panel.attachedSheet == nil {
@@ -111,6 +116,7 @@ final class MemoryOverlayController {
     }
 
     func hide() {
+        model.searchOnly = false
         restoreAfterSystemDialog = false
         restorePresentation()
         panel.orderOut(nil)
@@ -126,15 +132,19 @@ final class MemoryOverlayController {
         if !model.dismissSearch() { hide() }
     }
 
-    func showSearch() {
+    /// `only` shows just the search box. It leaves an open full view as it is; the plain shortcut
+    /// always shows the full view.
+    func showSearch(only: Bool = false) {
         guard !systemDialogPresented, panel.attachedSheet == nil, !model.showSettings, !model.showOnboarding else { return }
+        if !only || !panel.isVisible { model.searchOnly = only }
         show()
         NotificationCenter.default.post(name: .repriseFocusSearch, object: nil)
     }
 
     private func updatePresentation() {
+        // The search box alone leaves the menu bar and Dock in place, as a small panel would.
         guard panel.isVisible, NSApp.isActive, !systemDialogPresented,
-              !model.showSettings, !model.showOnboarding else { restorePresentation(); return }
+              !model.showSettings, !model.showOnboarding, !model.searchOnly else { restorePresentation(); return }
         if previousPresentation == nil { previousPresentation = NSApp.presentationOptions }
         // AppKit requires hideDock with hideMenuBar. Neither is a global preference.
         var options = NSApp.presentationOptions

@@ -8,14 +8,12 @@ struct MemoryAudioPanel: View {
     @ObservedObject var recorder: MeetingRecorder
     @Binding var transcriptExpanded: Bool
     let transcriptHeight: CGFloat
-    var framed = true
     var summary: MeetingSummary?
     var summarizing = false
     var summaryError: String?
     var providerName = ""
     var onSummarize: () -> Void = {}
     var onTranscribe: () -> Void = {}
-    var onClose: (() -> Void)?
     @State private var contentHeight: CGFloat = 44
     @State private var summaryHeight: CGFloat = 44
     @State private var page: Page = .summary
@@ -26,12 +24,7 @@ struct MemoryAudioPanel: View {
         segments.indices.last { segments[$0].start <= audio.position && audio.position < segments[$0].end }
     }
 
-    var body: some View {
-        Group {
-            if framed { content.modifier(GlassSurface()) }
-            else { content }
-        }
-    }
+    var body: some View { content.modifier(GlassSurface()) }
 
     private var content: some View {
         VStack(spacing: 0) {
@@ -56,9 +49,6 @@ struct MemoryAudioPanel: View {
                 Button { transcriptExpanded.toggle() } label: {
                     Image(systemName: transcriptExpanded ? "text.bubble.fill" : "text.bubble")
                 }.help(transcriptExpanded ? "Hide transcript" : "Show transcript").accessibilityLabel(transcriptExpanded ? "Hide transcript" : "Show transcript")
-                if let onClose {
-                    Button(action: onClose) { Image(systemName: "xmark") }.help("Close recording").accessibilityLabel("Close recording")
-                }
             }.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
 
             if transcriptExpanded {

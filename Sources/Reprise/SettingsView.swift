@@ -85,6 +85,9 @@ struct SettingsView: View {
             }
             if let loginError { Text(loginError).foregroundStyle(.secondary).repriseFont(.caption) }
             ShortcutSettings(shortcut: model.shortcut)
+            ShortcutSettings(shortcut: model.searchOnlyShortcut, title: "Search Only")
+            Text("Opens just the search box, without the memory view behind it. Opening a memory from it shows the full view.")
+                .foregroundStyle(.secondary).repriseFont(.caption)
             Button("Review Setup", systemImage: "checklist") { dismiss(); model.showOnboarding = true }
         }
         Section("Reprise") {
@@ -290,6 +293,11 @@ struct AISettings: View {
                     Picker("Thinking", selection: Binding(get: { model.thinkingChoice }, set: { model.chooseThinking($0) })) {
                         ForEach(model.thinkingChoices) { Text($0.name).tag($0.id) }
                     }
+                }
+                if model.fastAvailable {
+                    FastModeSwitch(model: model)
+                    Text(model.fastSettingNote ?? "Uses the model's Fast version, which answers sooner and uses your plan's limits faster.")
+                        .repriseFont(.caption).foregroundStyle(.secondary)
                 }
             }
             LabeledContent("Account", value: model.accountStatus?.message ?? "Checking...")

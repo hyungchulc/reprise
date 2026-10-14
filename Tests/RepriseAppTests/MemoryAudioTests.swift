@@ -101,8 +101,10 @@ final class MemoryAudioTests: XCTestCase {
         model.searchPresented = true
         XCTAssertTrue(model.dismissSearch())
         XCTAssertFalse(model.searchPresented)
-        XCTAssertEqual(model.response, response, "First Escape keeps the search available to reopen")
+        XCTAssertNil(model.response, "Escape starts a new search; the answer stays in recent searches")
         XCTAssertFalse(model.dismissSearch(), "The second Escape can close the overlay")
+        await model.restoreSearch("original question")
+        XCTAssertEqual(model.response, response)
         model.startNewSearch()
         XCTAssertEqual(model.search, "")
         XCTAssertTrue(model.searchTurns.isEmpty)
