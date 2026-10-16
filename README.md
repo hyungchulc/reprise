@@ -159,8 +159,8 @@ using, or the one you are scrolling or clicking in, each at its own resolution.
 In Safari and Chromium browsers it also saves the page address, without fragments
 or sign-in tokens and never from private windows; macOS asks once per browser, and
 **Settings > Privacy** turns it off. Settings expose smaller resolutions, intervals, retention and storage
-limits. Unchanged-screen deduplication that ignores the menu bar's clock and live status
-items, HEIC with JPEG fallback, separate 400px HEIC thumbnails, HEVC compression of
+limits. Screens saved without the menu bar (its clock and live status items never make a screen
+new, and the overlay shows memories below the live menu bar), HEIC with JPEG fallback, separate 400px HEIC thumbnails, HEVC compression of
 screens older than 15 minutes (roughly 4–7 times smaller in our samples), re-encoding at
 half resolution after 7 days (adjustable or off in Settings), OCR that reads again only the
 parts of the screen that changed or scrolled into view, bounded capture/OCR work,

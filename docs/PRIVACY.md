@@ -9,7 +9,8 @@ Updating the app does not change that path. The folder is private to your macOS
 account, and since 0.6 its contents are encrypted (below). Screens older than 15
 minutes are kept as frames of HEVC movies, re-encoded at half resolution after 7 days
 by default; deleting such a screen re-encodes its movie without it. The menu bar is left
-out of screen text and of the check for an unchanged screen, but stays in the image.
+out of saved screens, of screen text and of the check for an unchanged screen, unless a
+full-screen window covers it.
 
 With several displays, only the display you are using is captured: the one with the
 front window, or the one where you last scrolled or clicked if that is more recent than

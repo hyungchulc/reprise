@@ -144,6 +144,16 @@ final class MomentStoreTests: XCTestCase {
     }
 
     /// After a capture the count reads only the new moments; it must match a full count.
+    /// The mark of where screens without the menu bar begin is set once per library.
+    func testScreensWithoutMenuBarBeginAtTheLibrarysFirstOpening() throws {
+        let root = try temporaryRoot(), before = Date()
+        let first = try XCTUnwrap(try MomentStore(root: root, keys: testKeys).screensWithoutMenuBarSince)
+        XCTAssertEqual(first.timeIntervalSince1970, before.timeIntervalSince1970, accuracy: 5)
+        Thread.sleep(forTimeInterval: 0.05)
+        XCTAssertEqual(try MomentStore(root: root, keys: testKeys).screensWithoutMenuBarSince, first)
+        XCTAssertNil(try MomentStore(root: root, readOnly: true, keys: testKeys).screensWithoutMenuBarSince)
+    }
+
     func testStatsAfterNewMomentsMatchAFullCount() async throws {
         let store = try MomentStore(root: try temporaryRoot(), keys: testKeys)
         let start = Date(timeIntervalSince1970: 1_800_000_000)

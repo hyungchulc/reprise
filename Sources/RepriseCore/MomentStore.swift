@@ -18,6 +18,9 @@ public actor MomentStore {
     public nonisolated let cipher: VaultCipher
     /// This launch converted a library from before encryption.
     public nonisolated let convertedFromPlaintext: Bool
+    /// Screens saved from then on leave the menu bar out; older ones show it at the top. Nil when
+    /// opened read-only.
+    public nonisolated let screensWithoutMenuBarSince: Date?
     private let root: URL
     private let databaseURL: URL
     private let database: OpaquePointer
@@ -96,6 +99,7 @@ public actor MomentStore {
             throw MomentStoreError.database(message)
         }
         sqlite3_busy_timeout(connection, 5_000)
+        var withoutMenuBarSince: Date?
         do {
             try Self.unlock(connection, keys: keys)
             if readOnly {
@@ -198,6 +202,18 @@ public actor MomentStore {
                     try Self.execute(connection, "DROP TRIGGER moments_update; CREATE TRIGGER moments_update \(Self.updateTrigger); COMMIT")
                 } catch { try? Self.execute(connection, "ROLLBACK"); throw error }
             }
+            // A library's first opening by a version that saves screens without the menu bar marks
+            // where they begin.
+            try Self.execute(connection, """
+                CREATE TABLE IF NOT EXISTS library_marks (name TEXT PRIMARY KEY, value REAL NOT NULL);
+                INSERT OR IGNORE INTO library_marks VALUES ('screens_without_menu_bar', \(Date().timeIntervalSince1970));
+                """)
+            var mark: OpaquePointer?
+            if sqlite3_prepare_v2(connection, "SELECT value FROM library_marks WHERE name='screens_without_menu_bar'", -1, &mark, nil) == SQLITE_OK,
+               sqlite3_step(mark) == SQLITE_ROW {
+                withoutMenuBarSince = Date(timeIntervalSince1970: sqlite3_column_double(mark, 0))
+            }
+            sqlite3_finalize(mark)
             for suffix in ["", "-wal", "-shm"] { _ = lchmod(sqlitePath + suffix, 0o600) }
             }
         } catch {
@@ -211,6 +227,7 @@ public actor MomentStore {
         self.rootDescriptor = descriptor
         self.cipher = keys.cipher
         self.convertedFromPlaintext = converting
+        self.screensWithoutMenuBarSince = withoutMenuBarSince
     }
 
     /// Whether `keys` open the library at `root`. Reads only; a wrong key changes nothing.

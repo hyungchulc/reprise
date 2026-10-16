@@ -37,7 +37,8 @@ actor CaptureImageProcessor {
     private var rereadOrder: [String] = []
 
     /// `ignoringTopRows` covers the menu bar. Its clock and live status items change on their own, so
-    /// they neither make a screen new nor enter the searchable text; the saved image still shows them.
+    /// they neither make a screen new nor enter the searchable text, and the saved image leaves them
+    /// out: the memory view shows a screen below the menu bar that stays over it.
     /// `previousReading` is what the last saved screen held; where its tiles still match, its lines
     /// are kept and only the rest is read.
     func prepare(image: CGImage, root: URL, cipher: VaultCipher, settings: CaptureSettings, previousFingerprint: String?,
@@ -69,16 +70,17 @@ actor CaptureImageProcessor {
             let quality = settings.imageQuality.isFinite ? min(1, max(0.2, settings.imageQuality)) : 0.85
             var imagePath = "captures/\(id).heic"
             var thumbnailPath = "captures/\(id)-thumb.heic"
+            let screen = band > 0 ? image.cropping(to: CGRect(x: 0, y: band, width: image.width, height: image.height - band)) ?? image : image
             do {
                 // Pixels are encoded in memory and reach the disk only sealed.
-                var still = encode(image, type: .heic, quality: quality)
+                var still = encode(screen, type: .heic, quality: quality)
                 if still == nil {
                     imagePath = "captures/\(id).jpg"
-                    still = encode(image, type: .jpeg, quality: quality)
+                    still = encode(screen, type: .jpeg, quality: quality)
                 }
                 guard let still else { throw CaptureFailure("Unable to encode captured image.") }
                 try cipher.write(still, to: root.appendingPathComponent(imagePath))
-                guard let thumbnail = resized(image, maxDimension: 400) else { throw CaptureFailure("Unable to encode thumbnail.") }
+                guard let thumbnail = resized(screen, maxDimension: 400) else { throw CaptureFailure("Unable to encode thumbnail.") }
                 var small = encode(thumbnail, type: .heic, quality: 0.6)
                 if small == nil {
                     thumbnailPath = "captures/\(id)-thumb.jpg"

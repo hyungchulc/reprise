@@ -122,7 +122,7 @@ final class TimelineNavigationTests: XCTestCase {
         var decoded: [String] = []
         var releaseFirst: CheckedContinuation<Void, Never>?
         var releaseLast: CheckedContinuation<Void, Never>?
-        let loader = MemoryImageLoader { url, _ in
+        let loader = MemoryImageLoader { url, _, _ in
             decoded.append(url.lastPathComponent)
             if decoded.count == 1 { await withCheckedContinuation { releaseFirst = $0 } }
             else { await withCheckedContinuation { releaseLast = $0 } }
@@ -144,7 +144,7 @@ final class TimelineNavigationTests: XCTestCase {
 
     @MainActor func testCancelledPreviewCannotPublish() async throws {
         var release: CheckedContinuation<Void, Never>?
-        let loader = MemoryImageLoader { _, _ in
+        let loader = MemoryImageLoader { _, _, _ in
             await withCheckedContinuation { release = $0 }
             return NSImage(size: NSSize(width: 2, height: 2))
         }

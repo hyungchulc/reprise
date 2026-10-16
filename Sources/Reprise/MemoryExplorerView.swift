@@ -6,6 +6,8 @@ struct MemoryExplorerView: View {
     @ObservedObject var model: AppModel
     var topInset: CGFloat = 40
     var cornerRadius: CGFloat = 0
+    /// The height of the menu bar, which stays over the overlay. Memories are shown below it.
+    var menuBar: CGFloat = 0
     @State private var calendarOpen = false
     @State private var jumpDate = Date()
     private var searchExpanded: Bool {
@@ -229,24 +231,29 @@ struct MemoryExplorerView: View {
         }
     }
 
+    /// The memory below the menu bar, where the screen showed it. Screens saved before Reprise left
+    /// the menu bar out are shown without theirs.
     @ViewBuilder private func memoryCanvas(size: CGSize) -> some View {
         Color.clear
         if let moment = model.selection {
             if moment.kind == "meeting" {
                 Color.clear
             } else {
+                let area = CGSize(width: size.width, height: max(1, size.height - menuBar))
                 MemoryImage(screenOf: moment, root: model.root, cipher: model.cipher,
                             maxPixels: min(8192, Int((max(size.width, size.height) * displayScale * zoom).rounded(.up))),
-                            keepsPreviousImage: true)
-                    .frame(width: size.width * zoom, height: size.height * zoom)
+                            keepsPreviousImage: true, topCrop: model.menuBarShare(of: moment, screen: Double(menuBar / max(1, size.height))),
+                            backdrop: .black)
+                    .frame(width: area.width * zoom, height: area.height * zoom)
                     .offset(x: pan.width + dragPan.width, y: pan.height + dragPan.height)
-                    .frame(width: size.width, height: size.height).clipped()
+                    .frame(width: area.width, height: area.height).clipped()
                     .onTapGesture { searchFocused = false; if resultsVisible { searchExpanded = false } }
                     .gesture(DragGesture().updating($dragPan) { value, state, _ in if zoom > 1 { state = value.translation } }.onEnded { value in
                         guard zoom > 1 else { return }
-                        pan.width = min(size.width * (zoom - 1) / 2, max(-size.width * (zoom - 1) / 2, pan.width + value.translation.width))
-                        pan.height = min(size.height * (zoom - 1) / 2, max(-size.height * (zoom - 1) / 2, pan.height + value.translation.height))
+                        pan.width = min(area.width * (zoom - 1) / 2, max(-area.width * (zoom - 1) / 2, pan.width + value.translation.width))
+                        pan.height = min(area.height * (zoom - 1) / 2, max(-area.height * (zoom - 1) / 2, pan.height + value.translation.height))
                     })
+                    .frame(width: size.width, height: size.height, alignment: .bottom)
             }
         }
     }

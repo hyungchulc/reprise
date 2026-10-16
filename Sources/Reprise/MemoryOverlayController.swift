@@ -16,7 +16,8 @@ final class MemoryOverlayController {
     private var systemDialogPresented = false
     private var pauseReminder: PauseReminderController?
     private var previousPresentation: NSApplication.PresentationOptions?
-    private var configuredScreenFrame: NSRect?
+    /// The screen frame and menu bar height the memory view was laid out for.
+    private var configuredScreen: [CGFloat]?
     private var captionWindow: CaptionWindowController?
     private var assistantPanel: AssistantPanelController?
     /// When each on-and-off shortcut last acted; one press can arrive as a hotkey and as a key event.
@@ -121,11 +122,15 @@ final class MemoryOverlayController {
             previousApplication = NSWorkspace.shared.frontmostApplication
         }
         let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
-        let topInset = (screen?.safeAreaInsets.top ?? 0) + 12
         let frame = screen?.frame ?? NSRect(x: 0, y: 0, width: 1300, height: 850)
-        if configuredScreenFrame != frame, let hosting = panel.contentView as? TransparentHostingView<MemoryExplorerView> {
-            hosting.rootView = MemoryExplorerView(model: model, topInset: topInset, cornerRadius: (screen?.safeAreaInsets.top ?? 0) > 0 ? 18 : 0)
-            configuredScreenFrame = frame
+        // The menu bar stays over the overlay; with "automatically hide" it takes no room.
+        let menuBar = screen.map { max(0, $0.frame.maxY - $0.visibleFrame.maxY) } ?? 0
+        let topInset = max(menuBar, screen?.safeAreaInsets.top ?? 0) + 12
+        let layout = [frame.minX, frame.minY, frame.width, frame.height, menuBar]
+        if configuredScreen != layout, let hosting = panel.contentView as? TransparentHostingView<MemoryExplorerView> {
+            hosting.rootView = MemoryExplorerView(model: model, topInset: topInset, cornerRadius: (screen?.safeAreaInsets.top ?? 0) > 0 ? 18 : 0,
+                                                  menuBar: menuBar)
+            configuredScreen = layout
         }
         panel.setFrame(frame, display: true)
         panel.alphaValue = 1
@@ -178,14 +183,15 @@ final class MemoryOverlayController {
     }
 
     private func updatePresentation() {
-        // The search box alone leaves the menu bar and Dock in place, as a small panel would.
+        // The search box alone leaves the Dock in place, as a small panel would.
         guard panel.isVisible, NSApp.isActive, !systemDialogPresented,
               !model.showSettings, !model.showOnboarding, !model.searchOnly else { restorePresentation(); return }
         if previousPresentation == nil { previousPresentation = NSApp.presentationOptions }
-        // AppKit requires hideDock with hideMenuBar. Neither is a global preference.
+        // The Dock would cover the timeline. The menu bar stays, as it does for a Reprise in the menu
+        // bar only, which cannot hide it: memories are saved without it and shown below it.
         var options = NSApp.presentationOptions
-        options.subtract([.autoHideMenuBar, .autoHideDock, .autoHideToolbar])
-        options.formUnion([.hideMenuBar, .hideDock])
+        options.subtract([.autoHideDock, .autoHideToolbar])
+        options.formUnion([.hideDock])
         NSApp.presentationOptions = options
     }
 

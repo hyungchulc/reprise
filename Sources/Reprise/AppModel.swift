@@ -1312,6 +1312,15 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The share of a saved screen's height that shows its menu bar, on a screen where the menu bar
+    /// takes `share` of the height. Screens saved before Reprise left the menu bar out show it;
+    /// imported pictures never had one.
+    func menuBarShare(of moment: Moment, screen share: Double) -> Double {
+        guard share > 0, let since = store.screensWithoutMenuBarSince, moment.timestamp < since,
+              !(moment.appName == "Imported" && moment.bundleID.isEmpty) else { return 0 }
+        return share
+    }
+
     /// Screens saved before 0.8.1 lost Korean text: recognition used English first. They are read
     /// again newest first, one at a time with a pause between them, waiting while on battery.
     private func startRereadingScreens() {

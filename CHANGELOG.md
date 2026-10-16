@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0-alpha.10
+
+- **Screens are saved without the menu bar.** The memory overlay keeps the live menu bar
+  and shows each memory below it, where the screen showed it. Before, the live menu bar sat
+  on top of the one in the saved screen whenever Reprise was in the menu bar only, since
+  such an app cannot hide it. Screens saved earlier are shown without their menu bar too;
+  their files stay as they are. A full-screen window that covers the top edge is still
+  saved whole and shown below the menu bar.
+- **The Dock alone hides while the overlay is open**, and the overlay's top controls sit
+  below the menu bar on every display.
+
 ## 0.9.0-alpha.9
 
 - **Scrolling reads only what came into view.** When part of the screen only scrolled, the
