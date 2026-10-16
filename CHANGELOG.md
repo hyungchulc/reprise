@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.0-alpha.8
+
+- **Lighter screen reading.** Each new screen is compared with the last one in small tiles,
+  and only the lines that changed are read again; the rest keep the text read before. Every
+  change is still saved and typed text is still read. In our samples saving a screen after a
+  typed word took about a third of the CPU of reading the whole screen, and after a blinking
+  cursor about a quarter.
+- **Korean, Japanese and Chinese inside Latin lines.** A line mostly in Latin letters used to
+  turn the Korean, Japanese or Chinese in it into stray letters and bars. Such lines are now
+  read again with that language first, so "Stockholm Central에서 만나요" keeps its Korean.
+- **No dictionary correction of screen text.** Text is read as shown, which keeps names and
+  code intact and costs about half as much; Korean reads the same.
+
 ## 0.9.0-alpha.7
 
 - **Find speakers with OpenAI.** Settings > Audio & Meetings > Speakers > Find speakers

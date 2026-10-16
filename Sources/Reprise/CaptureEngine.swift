@@ -24,6 +24,8 @@ final class CaptureEngine: ObservableObject {
     private var observers: [NSObjectProtocol] = []
     private var lastFingerprint: String?
     private var lastContext: String?
+    /// The last saved screen's tiles and text; the next screen reads again only where it differs.
+    private var lastReading: ScreenReading?
 
     init(store: MomentStore, root: URL) {
         self.store = store
@@ -125,6 +127,7 @@ final class CaptureEngine: ObservableObject {
             // Low-density displays draw text with fewer pixels, so their text is read at full size.
             prepared = try await processor.prepare(image: image, root: root, cipher: store.cipher, settings: settings,
                 previousFingerprint: settings.deduplicate && contextKey == lastContext ? lastFingerprint : nil,
+                previousReading: lastReading, display: display.displayID,
                 ignoringTopRows: menuBarRows(display: display, window: window, image: image, pointHeight: filter.contentRect.height),
                 textScaleLimit: pixelScale < 1.5 ? 3_840 : 2_400)
             guard let result = prepared else { skip("Recording, unchanged screen"); return }
@@ -141,6 +144,7 @@ final class CaptureEngine: ObservableObject {
             prepared = nil
             lastFingerprint = result.fingerprint
             lastContext = contextKey
+            lastReading = result.reading
             capturedCount += 1
             lastCapture = result.timestamp
             lastError = result.ocrWarning
