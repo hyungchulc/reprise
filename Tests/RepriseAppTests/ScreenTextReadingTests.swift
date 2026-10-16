@@ -46,13 +46,52 @@ final class ScreenTextReadingTests: XCTestCase {
                      ScreenTextLine(box: CGRect(x: 0.1, y: 0.4, width: 0.3, height: 0.05), text: "lower"),
                      ScreenTextLine(box: CGRect(x: 0.1, y: 0.81, width: 0.3, height: 0.05), text: "left")]
         XCTAssertEqual(ScreenText.text(lines), "left\nright\nlower")
-        XCTAssertTrue(ScreenText.looksMisread("d, 4 71| 300|| Stockholm Centra|o", confidence: 1))
-        XCTAssertTrue(ScreenText.looksMisread("let requst = ecognize", confidence: 0.3))
-        XCTAssertFalse(ScreenText.looksMisread("| Name | Status | 2,400 |", confidence: 1), "table bars stand apart")
-        XCTAssertFalse(ScreenText.looksMisread("Stockholms centralstation, spår 4", confidence: 1))
+        let korean = ScreenText.scripts(of: "ko-KR")
+        XCTAssertTrue(ScreenText.looksMisread("d, 4 71| 300|| Stockholm Centra|o", confidence: 1, reading: korean))
+        XCTAssertTrue(ScreenText.looksMisread("let requst = ecognize // | |", confidence: 0.3, reading: korean))
+        XCTAssertTrue(ScreenText.looksMisread("10 号列上。", confidence: 0.3, reading: korean), "Chinese where only Korean is read")
+        XCTAssertFalse(ScreenText.looksMisread("Settings", confidence: 0.3, reading: korean), "unsure plain text")
+        XCTAssertFalse(ScreenText.looksMisread("| Name | Status | 2,400 |", confidence: 1, reading: korean), "table bars stand apart")
+        XCTAssertFalse(ScreenText.looksMisread("|> claude --resume|", confidence: 1, reading: korean), "box borders at the ends")
+        XCTAssertFalse(ScreenText.looksMisread("Stockholms centralstation, spår 4", confidence: 1, reading: korean))
         XCTAssertEqual(ScreenText.count("한글 text 漢字 かな", in: ScreenText.scripts(of: "ko-KR")), 2)
         XCTAssertEqual(ScreenText.count("한글 text 漢字 かな", in: ScreenText.scripts(of: "ja-JP")), 4)
         XCTAssertTrue(ScreenText.scripts(of: "sv-SE").isEmpty)
+    }
+
+    /// A page that scrolled up keeps the lines it read, moved along, and reads only what came into view.
+    func testAScrolledPageReadsOnlyWhatCameIntoView() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-scroll-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let rows = (1...16).map { "Line \($0): 회의록 \($0)번 항목, budget review item \($0 * 7)" }
+        func page(scrolled: Int, count: Int) throws -> CGImage {
+            try screen(width: 2400, height: 900) { context in
+                for (index, row) in rows.prefix(count).enumerated() {
+                    context.textPosition = CGPoint(x: 60, y: 900 - 90 - index * 54 + scrolled)
+                    CTLineDraw(CTLineCreateWithAttributedString(NSAttributedString(string: row, attributes: [.font: NSFont.systemFont(ofSize: 28)])), context)
+                }
+                // A menu bar the page scrolls under.
+                context.setFillColor(CGColor(gray: 0.8, alpha: 1)); context.fill(CGRect(x: 0, y: 880, width: 2400, height: 20))
+            }
+        }
+        let processor = CaptureImageProcessor()
+        let firstResult = try await processor.prepare(image: try page(scrolled: 0, count: 15), root: root, cipher: testKeys.cipher,
+                                                      settings: CaptureSettings(), previousFingerprint: nil, ignoringTopRows: 20)
+        let first = try XCTUnwrap(firstResult)
+        XCTAssertTrue(first.text.contains("Line 1:"))
+        let earlier = try XCTUnwrap(first.reading?.tiles)
+        let scrolledImage = try page(scrolled: 108, count: 16)
+        let grid = try tiles(scrolledImage)
+        XCTAssertEqual(grid.shift(in: try XCTUnwrap(grid.changes(since: earlier)?.first), since: earlier), 108)
+        let secondResult = try await processor.prepare(image: scrolledImage, root: root, cipher: testKeys.cipher, settings: CaptureSettings(),
+                                                       previousFingerprint: first.fingerprint, previousReading: first.reading, ignoringTopRows: 20)
+        let second = try XCTUnwrap(secondResult)
+        let areas = try XCTUnwrap(second.reading?.areas, "a scrolled page is not read whole")
+        XCTAssertLessThan(areas.reduce(0) { $0 + $1.height }, 300, "only rows that came into view are read")
+        XCTAssertTrue(second.text.contains("Line 16:"), second.text)
+        XCTAssertFalse(second.text.contains("Line 1:"), "scrolled away under the menu bar")
+        for number in 3...15 { XCTAssertEqual(second.text.components(separatedBy: "Line \(number):").count, 2, "Line \(number) once in \(second.text)") }
     }
 
     /// Reads a screen whole, then reads only the line that changed. The mixed line keeps its Korean

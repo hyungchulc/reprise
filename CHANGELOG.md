@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0-alpha.9
+
+- **Scrolling reads only what came into view.** When part of the screen only scrolled, the
+  lines already read move along with it, and only the rows that came into view are read. In
+  our samples a scrolled page cost about half of reading it whole.
+- **Lighter checks for misread lines.** Box borders drawn in text, as in terminal apps, no
+  longer count as signs of a misread line, and a line read again is remembered while it stays
+  on screen or scrolls. In 0.9.0-alpha.8 these checks took about half of the screen reading.
+- **Counting the library after each capture** reads only the new memories; the whole library
+  is counted at most once a minute.
+
 ## 0.9.0-alpha.8
 
 - **Lighter screen reading.** Each new screen is compared with the last one in small tiles,

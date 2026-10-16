@@ -891,11 +891,41 @@ public actor MomentStore {
         let apps = try prepare("SELECT DISTINCT app_name FROM moments ORDER BY app_name COLLATE NOCASE,app_name")
         defer { sqlite3_reset(apps); sqlite3_clear_bindings(apps) }
         while try step(apps) { result.apps.append(string(apps, 0)) }
-        for suffix in ["", "-wal", "-shm"] {
-            let attributes = try? FileManager.default.attributesOfItem(atPath: databaseURL.path + suffix)
-            result.databaseBytes += (attributes?[.size] as? NSNumber)?.int64Value ?? 0
-        }
+        result.databaseBytes = databaseFileBytes()
         return result
+    }
+
+    /// `known` brought up to date with the moments saved after its newest one, read through the
+    /// time index instead of the whole table. Deletions, archiving and moments dated earlier show
+    /// up at the next full `stats()`.
+    public func stats(after known: LibraryStats) throws -> LibraryStats {
+        guard let newest = known.newest else { return try stats() }
+        var result = known
+        let added = try prepare("SELECT COUNT(*),COALESCE(SUM(byte_count),0),MAX(timestamp) FROM moments WHERE timestamp>?")
+        defer { sqlite3_reset(added); sqlite3_clear_bindings(added) }
+        sqlite3_bind_double(added, 1, newest.timeIntervalSince1970)
+        if try step(added), sqlite3_column_int64(added, 0) > 0 {
+            result.momentCount += Int(sqlite3_column_int64(added, 0))
+            result.storedBytes += sqlite3_column_int64(added, 1)
+            result.newest = Date(timeIntervalSince1970: sqlite3_column_double(added, 2))
+            let apps = try prepare("SELECT DISTINCT app_name FROM moments WHERE timestamp>?")
+            defer { sqlite3_reset(apps); sqlite3_clear_bindings(apps) }
+            sqlite3_bind_double(apps, 1, newest.timeIntervalSince1970)
+            var names = Set(result.apps)
+            while try step(apps) { names.insert(string(apps, 0)) }
+            if names.count != result.apps.count {
+                result.apps = names.sorted { ($0.lowercased(), $0) < ($1.lowercased(), $1) }
+            }
+        }
+        result.databaseBytes = databaseFileBytes()
+        return result
+    }
+
+    private func databaseFileBytes() -> Int64 {
+        ["", "-wal", "-shm"].reduce(0) { total, suffix in
+            let attributes = try? FileManager.default.attributesOfItem(atPath: databaseURL.path + suffix)
+            return total + ((attributes?[.size] as? NSNumber)?.int64Value ?? 0)
+        }
     }
 
     public func recordUsage(_ entry: UsageEntry) throws {

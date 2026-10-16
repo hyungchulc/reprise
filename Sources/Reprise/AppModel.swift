@@ -153,6 +153,8 @@ final class AppModel: ObservableObject {
     private var timelineHalfSpan: TimeInterval = 4_320
     private var navigationGeneration = UUID()
     private var subscriptions = Set<AnyCancellable>()
+    /// When the whole library was last counted; see `reload(preserve:afterCapture:)`.
+    private var statsCountedAt: Date?
     private var providerConfigurations: [String: AIProviderConfiguration] = [:]
     private var statusGeneration = UUID()
     private var appliedCaptureSettings: CaptureSettings?
@@ -194,7 +196,7 @@ final class AppModel: ObservableObject {
         $dayFilter.removeDuplicates().dropFirst().sink { [weak self] _ in self?.filtersChanged() }.store(in: &subscriptions)
         capture.$lastCapture.compactMap { $0 }.removeDuplicates()
             .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
-            .sink { [weak self] _ in Task { await self?.reload(preserve: true) } }
+            .sink { [weak self] _ in Task { await self?.reload(preserve: true, afterCapture: true) } }
             .store(in: &subscriptions)
         meeting.$lastSavedMoment.compactMap { $0 }.sink { [weak self] moment in
             guard let self else { return }
@@ -295,7 +297,9 @@ final class AppModel: ObservableObject {
             kind: mode == "meetings" ? "meeting" : nil, limit: 200)
     }
 
-    func reload(preserve: Bool = false) async {
+    /// `afterCapture` counts only the moments saved since the last count, reading the whole library
+    /// at most once a minute: a full count on every capture read the encrypted table each time.
+    func reload(preserve: Bool = false, afterCapture: Bool = false) async {
         if !preserve { cancelNavigation() }
         let navigation = navigationGeneration
         let generation = UUID(); timelineGeneration = generation
@@ -303,7 +307,13 @@ final class AppModel: ObservableObject {
         let wasAtLatest = selection == nil || (timelineDate ?? selection?.timestamp) == stats.newest
         do {
             let oldCount = stats.momentCount
-            let updatedStats = try await store.stats()
+            let updatedStats: LibraryStats
+            if afterCapture, let counted = statsCountedAt, Date().timeIntervalSince(counted) < 60 {
+                updatedStats = try await store.stats(after: stats)
+            } else {
+                updatedStats = try await store.stats()
+                statsCountedAt = Date()
+            }
             guard generation == timelineGeneration else { return }
             stats = updatedStats
             if !preserve || moments.isEmpty || oldCount != stats.momentCount {

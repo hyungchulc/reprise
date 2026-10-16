@@ -163,7 +163,7 @@ limits. Unchanged-screen deduplication that ignores the menu bar's clock and liv
 items, HEIC with JPEG fallback, separate 400px HEIC thumbnails, HEVC compression of
 screens older than 15 minutes (roughly 4–7 times smaller in our samples), re-encoding at
 half resolution after 7 days (adjustable or off in Settings), OCR that reads again only the
-parts of the screen that changed, bounded capture/OCR work,
+parts of the screen that changed or scrolled into view, bounded capture/OCR work,
 and 96 MB preview / 8 MB thumbnail caches
 limit background work. These are implementation choices, not measured guarantees
 against another app. CPU and process memory are visible; GPU usage is not measured.

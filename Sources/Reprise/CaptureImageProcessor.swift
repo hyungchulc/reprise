@@ -31,6 +31,10 @@ struct PreparedCapture: Sendable {
 /// capture for good (0.8.1-alpha.1 and alpha.2).
 actor CaptureImageProcessor {
     static let shared = CaptureImageProcessor()
+    /// What misread lines turned into when read again, by the languages and the text first read,
+    /// so a line that stays on screen or scrolls is read again only once.
+    private var rereads: [String: String] = [:]
+    private var rereadOrder: [String] = []
 
     /// `ignoringTopRows` covers the menu bar. Its clock and live status items change on their own, so
     /// they neither make a screen new nor enter the searchable text; the saved image still shows them.
@@ -113,22 +117,55 @@ actor CaptureImageProcessor {
         let top = CGFloat(min(max(0, band), image.height - 1))
         let readable = CGRect(x: 0, y: top, width: size.width, height: size.height - top)
         if let tiles, let previous, let earlier = previous.tiles, previous.display == display, previous.languages == languages,
-           let changes = tiles.changes(since: earlier),
-           let areas = ScreenText.readingAreas(changes, previous: previous.lines, size: size, readable: readable) {
-            // Lines the changes did not touch keep what was read before; each area is read with a
-            // little room, and only lines centred inside it are taken from that reading.
-            var lines = previous.lines.filter { line in !areas.contains { $0.intersects(ScreenText.pixels(line.box, of: size)) } }
-            for area in areas {
-                let room = area.insetBy(dx: -12, dy: -8).intersection(readable)
-                lines += try readLines(in: image, area: room, languages: languages, scaleLimit: scaleLimit).filter {
-                    let pixels = ScreenText.pixels($0.box, of: size)
-                    return area.contains(CGPoint(x: pixels.midX, y: pixels.midY))
+           let changes = tiles.changes(since: earlier) {
+            // Where the content only scrolled, its lines move along with it, and only rows that
+            // came into view or changed are read.
+            var moved = previous.lines, unread: [CGRect] = []
+            for region in changes {
+                guard let shift = tiles.shift(in: region, since: earlier) else { unread.append(region); continue }
+                // Vision's boxes run a little past the letters, so a line belongs to the area by its
+                // rows and its middle.
+                func inside(_ line: CGRect) -> Bool {
+                    line.minY >= region.minY && line.maxY <= region.maxY && line.midX >= region.minX && line.midX <= region.maxX
                 }
+                moved = moved.compactMap { line in
+                    let before = ScreenText.pixels(line.box, of: size)
+                    // A line beside the area, which only its margin touches, did not move.
+                    guard before.intersects(region), before.midX >= region.minX, before.midX <= region.maxX else { return line }
+                    let now = before.offsetBy(dx: 0, dy: -CGFloat(shift))
+                    if inside(before), inside(now) {
+                        return ScreenTextLine(box: ScreenText.box(pixels: now, of: size), text: line.text)
+                    }
+                    // A line moved out over the edge is read again where part of it still shows; one
+                    // that reached over the edge before also where it was, since only part of it moved.
+                    unread += [now.intersection(region), inside(before) ? .null : before.intersection(readable)].filter { !$0.isNull && !$0.isEmpty }
+                    return nil
+                }
+                unread += tiles.changes(in: region, since: earlier, shift: shift)
             }
-            return ScreenReading(display: display, languages: languages, tiles: tiles, lines: lines, areas: areas)
+            if let areas = ScreenText.readingAreas(unread, previous: moved, size: size, readable: readable) {
+                return try reading(image, areas: areas, keeping: moved, readable: readable, tiles: tiles, display: display,
+                                   languages: languages, scaleLimit: scaleLimit)
+            }
         }
         let lines = try readLines(in: image, area: readable, languages: languages, scaleLimit: scaleLimit)
         return ScreenReading(display: display, languages: languages, tiles: tiles, lines: lines, areas: nil)
+    }
+
+    /// Reads `areas` and keeps the earlier lines outside them. Each area is read with a little room,
+    /// and only lines centred inside it are taken from that reading.
+    private func reading(_ image: CGImage, areas: [CGRect], keeping earlier: [ScreenTextLine], readable: CGRect, tiles: TileGrid,
+                         display: UInt32?, languages: [String], scaleLimit: Int) throws -> ScreenReading {
+        let size = CGSize(width: image.width, height: image.height)
+        var lines = earlier.filter { line in !areas.contains { $0.intersects(ScreenText.pixels(line.box, of: size)) } }
+        for area in areas {
+            let room = area.insetBy(dx: -12, dy: -8).intersection(readable)
+            lines += try readLines(in: image, area: room, languages: languages, scaleLimit: scaleLimit).filter {
+                let pixels = ScreenText.pixels($0.box, of: size)
+                return area.contains(CGPoint(x: pixels.midX, y: pixels.midY))
+            }
+        }
+        return ScreenReading(display: display, languages: languages, tiles: tiles, lines: lines, areas: areas)
     }
 
     /// The lines of text in `area` of an image, given in pixels with the origin at the top left.
@@ -158,13 +195,25 @@ actor CaptureImageProcessor {
         // the new reading is kept when it holds more of that script.
         let wide = hints.filter { !ScreenText.scripts(of: $0).isEmpty }
         if !wide.isEmpty {
-            var budget = 12
-            for index in lines.indices where budget > 0 && ScreenText.looksMisread(lines[index].line.text, confidence: lines[index].confidence) {
+            let scripts = hints.reduce(into: Set<ScreenText.Script>()) { $0.formUnion(ScreenText.scripts(of: $1)) }
+            var budget = 6
+            for index in lines.indices where ScreenText.looksMisread(lines[index].line.text, confidence: lines[index].confidence, reading: scripts) {
+                let first = lines[index].line.text, key = hints.joined(separator: ",") + "\n" + first
+                if let known = rereads[key] { lines[index].line.text = known; continue }
+                guard budget > 0 else { continue }
                 budget -= 1
-                lines[index].line.text = try reread(lines[index].line, in: image, first: wide, languages: hints)
+                let text = try reread(lines[index].line, in: image, first: wide, languages: hints)
+                lines[index].line.text = text
+                // Short readings are too common to stand for one line.
+                if first.count >= 8 { remember(key, text) }
             }
         }
         return lines.map(\.line)
+    }
+
+    private func remember(_ key: String, _ text: String) {
+        if rereads.updateValue(text, forKey: key) == nil { rereadOrder.append(key) }
+        if rereadOrder.count > 512 { rereads[rereadOrder.removeFirst()] = nil }
     }
 
     /// One line read again at full size with each wide-script language first in turn.

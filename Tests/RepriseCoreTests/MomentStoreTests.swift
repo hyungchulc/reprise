@@ -143,6 +143,25 @@ final class MomentStoreTests: XCTestCase {
         XCTAssertEqual(remaining.momentCount, 0)
     }
 
+    /// After a capture the count reads only the new moments; it must match a full count.
+    func testStatsAfterNewMomentsMatchAFullCount() async throws {
+        let store = try MomentStore(root: try temporaryRoot(), keys: testKeys)
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        try await store.insert(Moment(id: "a", timestamp: start, appName: "Notes", byteCount: 10))
+        try await store.insert(Moment(id: "b", timestamp: start.addingTimeInterval(3), appName: "browser", byteCount: 20))
+        let known = try await store.stats()
+        try await store.insert(Moment(id: "c", timestamp: start.addingTimeInterval(6), appName: "Mail", byteCount: 30))
+        try await store.insert(Moment(id: "d", timestamp: start.addingTimeInterval(9), appName: "Notes", byteCount: 40))
+        let counted = try await store.stats(after: known), full = try await store.stats()
+        XCTAssertEqual(counted.momentCount, full.momentCount)
+        XCTAssertEqual(counted.storedBytes, full.storedBytes)
+        XCTAssertEqual(counted.newest, full.newest)
+        XCTAssertEqual(counted.oldest, full.oldest)
+        XCTAssertEqual(counted.apps, full.apps)
+        let unchanged = try await store.stats(after: full)
+        XCTAssertEqual(unchanged.momentCount, full.momentCount)
+    }
+
     func testRetentionAndBudgetPreserveBookmarksAndReportStats() async throws {
         let root = try temporaryRoot()
         let store = try MomentStore(root: root, keys: testKeys)
