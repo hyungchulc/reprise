@@ -157,6 +157,28 @@ final class TimelineNavigationTests: XCTestCase {
         XCTAssertEqual(loader.loadedKey, "")
     }
 
+    /// Latest memory lands on the newest screen from far back and clears the search and filters.
+    @MainActor func testLatestShowsTheNewestScreenFromAnOlderWindow() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try AppModel(root: root, keys: testKeys)
+        defer { model.shutdown() }
+        for index in 0..<600 {
+            try await model.store.insert(Moment(id: "frame-\(index)", timestamp: Date(timeIntervalSince1970: Double(index * 10)),
+                                                appName: index.isMultiple(of: 2) ? "Notes" : "Mail"))
+        }
+        await model.reload()
+        await model.jump(to: Date(timeIntervalSince1970: 50))
+        XCTAssertFalse(model.moments.contains { $0.id == "frame-599" }, "the loaded window moved to the oldest screens")
+        model.appFilter = "Mail"; model.search = "budget"
+        await model.showLatest()
+        XCTAssertEqual(model.selection?.id, "frame-599")
+        XCTAssertEqual(model.timelineDate, model.selection?.timestamp)
+        XCTAssertEqual(model.moments.first?.id, "frame-599")
+        XCTAssertNil(model.appFilter)
+        XCTAssertEqual(model.search, "")
+    }
+
     private func temporaryRoot() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent("reprise-timeline-\(UUID().uuidString)") }
 
     @MainActor private func settle(_ condition: () -> Bool) async throws {

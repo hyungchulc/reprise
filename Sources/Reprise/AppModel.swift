@@ -317,8 +317,7 @@ final class AppModel: ObservableObject {
             guard generation == timelineGeneration else { return }
             stats = updatedStats
             if !preserve || moments.isEmpty || oldCount != stats.momentCount {
-                var timelineQuery = query; timelineQuery.text = ""; timelineQuery.appName = nil; timelineQuery.kind = nil
-                timelineQuery.screensOnly = true
+                let timelineQuery = self.timelineQuery
                 let latest = try await store.query(timelineQuery)
                 guard generation == timelineGeneration else { return }
                 let followLatest = wasAtLatest && selectedID == selection?.id
@@ -335,6 +334,33 @@ final class AppModel: ObservableObject {
             await refreshMatches()
             if !preserve { usages = try await store.usage(since: calendar.date(byAdding: .day, value: -30, to: Date())) }
         } catch { self.error = error.localizedDescription }
+    }
+
+    /// The timeline's screens: every app, within the chosen day.
+    private var timelineQuery: MomentQuery {
+        var request = query; request.text = ""; request.appName = nil; request.kind = nil; request.screensOnly = true
+        return request
+    }
+
+    /// Latest memory: the newest screen shows at once, then the library is counted behind it. The
+    /// button used to reload first, counting every memory before anything moved, and a scroll in
+    /// the meantime dropped the jump.
+    func showLatest() async {
+        // A day filter limited the loaded screens to that day.
+        let dayLimited = dayFilter != nil
+        search = ""; dayFilter = nil; appFilter = nil
+        cancelNavigation()
+        let navigation = navigationGeneration
+        if dayLimited || moments.first == nil || moments.first?.timestamp != stats.newest {
+            do {
+                let request = timelineQuery
+                let latest = try await store.query(request)
+                guard navigation == navigationGeneration else { return }
+                moments = latest; hasMore = latest.count == request.limit
+            } catch { self.error = error.localizedDescription; return }
+        }
+        selection = moments.first; timelineDate = selection?.timestamp
+        await reload(preserve: true)
     }
 
     /// Time words in the quick search, such as 오늘 or 어제 저녁, read as a time range.

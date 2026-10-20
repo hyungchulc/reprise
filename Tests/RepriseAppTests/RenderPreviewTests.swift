@@ -158,6 +158,18 @@ final class RenderPreviewTests: XCTestCase {
         withExtendedLifetime(controller) {}
     }
 
+    @MainActor func testRenderMemoryOverlayControlsWhenRequested() async throws {
+        guard let folder = ProcessInfo.processInfo.environment["REPRISE_RENDER"] else { throw XCTSkip("Set REPRISE_RENDER to a folder to render previews.") }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("reprise-render-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = NSApplication.shared
+        let model = try AppModel(root: root, keys: testKeys, models: root.appendingPathComponent("Models"))
+        let overlay = ZStack { Color(white: 0.55); MemoryExplorerView(model: model, topInset: 51, cornerRadius: 18, menuBar: 39) }
+            .frame(width: 1400, height: 900)
+        try render(overlay, to: URL(fileURLWithPath: folder).appendingPathComponent("overlay-controls.png"))
+    }
+
     @MainActor private func render(_ view: some View, to url: URL) throws {
         let host = NSHostingView(rootView: view)
         host.frame = NSRect(origin: .zero, size: host.fittingSize)

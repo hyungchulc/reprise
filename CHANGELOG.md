@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0-alpha.11
+
+- **Overlay buttons take clicks across their whole cell.** Latest memory, search, screen
+  text, zoom, playback, recording, close and More answered only on the icon's own shape, a
+  few points across, so a click beside the icon on its bar did nothing; 7 points from the
+  centre of the Latest memory arrow already missed. Each icon now answers across its cell,
+  and the icons stay where they were.
+- **Latest memory moves at once.** It shows the newest screen first and counts the library
+  behind it. Before, it counted every memory before anything moved, and a scroll in that
+  time dropped the jump.
+
 ## 0.9.0-alpha.10
 
 - **Screens are saved without the menu bar.** The memory overlay keeps the live menu bar

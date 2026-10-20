@@ -223,11 +223,13 @@ struct MemoryExplorerView: View {
                 Text("Reprise").fontWeight(.medium)
             }.repriseFont().padding(.horizontal, 10).padding(.vertical, 6).modifier(GlassSurface())
             Spacer()
-            HStack(spacing: 14) {
+            HStack(spacing: 0) {
                 RecordingControls(model: model, capture: model.capture, meeting: model.meeting)
-                Button { NotificationCenter.default.post(name: .repriseCloseMemory, object: nil) } label: { Image(systemName: "xmark") }.help("Close overlay")
+                Button { NotificationCenter.default.post(name: .repriseCloseMemory, object: nil) } label: {
+                    Image(systemName: "xmark").controlCell(width: 30, height: 36)
+                }.help("Close overlay")
                 moreMenu
-            }.buttonStyle(.plain).focusEffectDisabled().padding(.horizontal, 14).padding(.vertical, 10).modifier(GlassSurface())
+            }.buttonStyle(.plain).focusEffectDisabled().padding(.horizontal, 7).modifier(GlassSurface())
         }
     }
 
@@ -447,23 +449,27 @@ struct MemoryExplorerView: View {
     private var bottomControls: some View {
         ZStack {
             HStack(spacing: 8) {
-                HStack(spacing: 8) {
-                    Button { model.skip(1) } label: { Image(systemName: "backward.end").frame(width: 26, height: 32) }.help("Back 30 seconds")
-                    Button { playing.toggle() } label: { Image(systemName: playing ? "pause.fill" : "play.fill").frame(width: 26, height: 32) }.help("Play memories")
-                    Button { model.skip(-1) } label: { Image(systemName: "forward.end").frame(width: 26, height: 32) }.help("Forward 30 seconds")
-                }.padding(.horizontal, 12).padding(.vertical, 4).modifier(GlassSurface())
+                HStack(spacing: 0) {
+                    Button { model.skip(1) } label: { Image(systemName: "backward.end").controlCell(width: 34, height: 40) }.help("Back 30 seconds")
+                    Button { playing.toggle() } label: { Image(systemName: playing ? "pause.fill" : "play.fill").controlCell(width: 34, height: 40) }.help("Play memories")
+                    Button { model.skip(-1) } label: { Image(systemName: "forward.end").controlCell(width: 34, height: 40) }.help("Forward 30 seconds")
+                }.padding(.horizontal, 8).modifier(GlassSurface())
                 Spacer()
-                HStack(spacing: 15) {
+                HStack(spacing: 0) {
                     if let address = model.selection?.url, let url = URL(string: address) {
-                        Button { NSWorkspace.shared.open(url) } label: { Image(systemName: "safari") }
+                        Button { NSWorkspace.shared.open(url) } label: { Image(systemName: "safari").controlCell(width: 30, height: 40) }
                             .help("Open \(BrowserAddress.short(address))").accessibilityLabel("Open page \(BrowserAddress.short(address))")
                     }
-                    Button { searchExpanded.toggle(); searchFocused = searchExpanded } label: { Image(systemName: "magnifyingglass") }.help("Search memory")
-                    Button { showText.toggle() } label: { Image(systemName: "text.viewfinder") }
+                    Button { searchExpanded.toggle(); searchFocused = searchExpanded } label: { Image(systemName: "magnifyingglass").controlCell(width: 30, height: 40) }
+                        .help("Search memory")
+                    Button { showText.toggle() } label: { Image(systemName: "text.viewfinder").controlCell(width: 30, height: 40) }
                         .help("Select screen text")
-                    Button { zoom = zoom == 1 ? 1.5 : 1; pan = .zero } label: { Image(systemName: zoom == 1 ? "plus.magnifyingglass" : "minus.magnifyingglass") }.help("Zoom memory")
-                    Button { Task { model.search = ""; model.dayFilter = nil; model.appFilter = nil; await model.reload() } } label: { Image(systemName: "arrow.right.to.line") }.help("Latest memory")
-                }.padding(.horizontal, 16).padding(.vertical, 12).modifier(GlassSurface())
+                    Button { zoom = zoom == 1 ? 1.5 : 1; pan = .zero } label: {
+                        Image(systemName: zoom == 1 ? "plus.magnifyingglass" : "minus.magnifyingglass").controlCell(width: 30, height: 40)
+                    }.help("Zoom memory")
+                    Button { Task { await model.showLatest() } } label: { Image(systemName: "arrow.right.to.line").controlCell(width: 30, height: 40) }
+                        .help("Latest memory").accessibilityLabel("Latest memory")
+                }.padding(.horizontal, 8).modifier(GlassSurface())
             }.padding(.horizontal, 18)
             Button { jumpDate = model.timelineDate ?? model.selection?.timestamp ?? Date(); calendarOpen = true } label: {
                 HStack(spacing: 8) {
@@ -484,7 +490,7 @@ struct MemoryExplorerView: View {
             Button("Delete Memory...", systemImage: "trash", role: .destructive) { deleteConfirmation = true }.disabled(model.selection == nil)
             Divider()
             Button("Settings...", systemImage: "gearshape") { model.showSettings = true }
-        } label: { Image(systemName: "ellipsis") }
+        } label: { Image(systemName: "ellipsis").controlCell(width: 30, height: 36) }
             .menuIndicator(.hidden).help("More")
     }
     private func submitSearch() {
