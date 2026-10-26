@@ -164,6 +164,8 @@ public actor MomentStore {
             if !columns.contains("url") { try Self.execute(connection, "ALTER TABLE moments ADD COLUMN url TEXT") }
             // Screens read before 0.8.1 lost Korean text; NULL marks them for reading again.
             if !columns.contains("text_revision") { try Self.execute(connection, "ALTER TABLE moments ADD COLUMN text_revision INTEGER") }
+            // Screens saved before their text could be read join them; the app looks for them while it runs.
+            try Self.execute(connection, "CREATE INDEX IF NOT EXISTS moments_unread ON moments(timestamp DESC, id DESC) WHERE kind='screen' AND text_revision IS NULL")
             // Browser addresses joined the full-text index in 0.8; older indexes are rebuilt once.
             var index: OpaquePointer?
             guard sqlite3_prepare_v2(connection, "PRAGMA table_info(moments_fts)", -1, &index, nil) == SQLITE_OK else {
@@ -359,13 +361,14 @@ public actor MomentStore {
         Darwin.close(rootDescriptor)
     }
 
-    public func insert(_ moment: Moment) throws {
+    /// `textRead` false saves a screen whose text could not be read yet; it is read in the background.
+    public func insert(_ moment: Moment, textRead: Bool = true) throws {
         var moment = moment
         moment.imagePath = try normalizedMediaPath(moment.imagePath)
         moment.thumbnailPath = try normalizedMediaPath(moment.thumbnailPath)
         moment.videoPath = try moment.videoPath.map { try normalizedMediaPath($0) }
         let statement = try prepare("""
-            INSERT INTO moments (\(Self.columns),text_revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,\(Self.textRevision))
+            INSERT INTO moments (\(Self.columns),text_revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,\(textRead ? "\(Self.textRevision)" : "NULL"))
             ON CONFLICT(id) DO UPDATE SET timestamp=excluded.timestamp,app_name=excluded.app_name,
                 bundle_id=excluded.bundle_id,window_title=excluded.window_title,text=excluded.text,
                 image_path=excluded.image_path,thumbnail_path=excluded.thumbnail_path,
@@ -394,7 +397,7 @@ public actor MomentStore {
     /// The screen text recognition new captures get. Older screens are read again in the background.
     public static let textRevision = 1
 
-    /// Screens whose text was recognized before the current revision, newest first.
+    /// Screens whose text was recognized before the current revision or not read yet, newest first.
     public func screensNeedingText(limit: Int) throws -> [Moment] {
         let statement = try prepare("SELECT \(Self.columns) FROM moments WHERE kind='screen' AND text_revision IS NULL ORDER BY timestamp DESC,id DESC LIMIT ?")
         defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }

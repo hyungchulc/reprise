@@ -49,6 +49,8 @@ final class AppModel: ObservableObject {
     /// Set while screen recording runs; still set at launch means the last run ended without
     /// Pause or Quit, such as a crash, force quit or power loss, so recording resumes.
     static let captureSessionKey = "captureSessionOpen"
+    /// Given for the launch after Reprise restarted on its own: it comes back as it was, in the background.
+    static let quietLaunchKey = "RepriseQuietLaunch"
     @Published var moments: [Moment] = []
     @Published var matchingMoments: [Moment] = []
     @Published var aiMatches: [Moment]?
@@ -98,7 +100,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var fastSettingNote: String?
     /// The context windows the provider's CLI offers for the chosen model, with its default.
     @Published private(set) var contextWindows: (standard: Int, options: [Int])?
-    /// Screens saved before 0.8.1 that are still waiting to have their text read again.
+    /// Screens still waiting to have their text read.
     @Published private(set) var screensToReread = 0
     /// Every memory in the time a quick search names, when only part of it is shown.
     @Published private(set) var searchTimeTotal: Int?
@@ -250,7 +252,9 @@ final class AppModel: ObservableObject {
         let resumeCapture = UserDefaults.standard.bool(forKey: "resumeCaptureAfterRestart")
         let interrupted = UserDefaults.standard.bool(forKey: Self.captureSessionKey)
         UserDefaults.standard.removeObject(forKey: "resumeCaptureAfterRestart")
-        if !showOnboarding, preferences.startRecordingOnLaunch || resumeCapture || interrupted, CGPreflightScreenCaptureAccess() {
+        let restarted = UserDefaults.standard.bool(forKey: Self.quietLaunchKey)
+        if !showOnboarding, restarted ? resumeCapture : preferences.startRecordingOnLaunch || resumeCapture || interrupted,
+           CGPreflightScreenCaptureAccess() {
             await capture.start(settings: settings); appliedCaptureSettings = settings
         }
         UserDefaults.standard.set(capture.isRecording, forKey: Self.captureSessionKey)
@@ -1271,8 +1275,8 @@ final class AppModel: ObservableObject {
         busy = true; defer { busy = false }
         do {
             for url in panel.urls {
-                let moment = try await ImageImporter.shared.importFile(url, root: root, cipher: cipher)
-                try await store.insert(moment)
+                let imported = try await ImageImporter.shared.importFile(url, root: root, cipher: cipher)
+                try await store.insert(imported.moment, textRead: imported.textRead)
             }
             dayFilter = nil; search = ""; await reload()
         } catch { self.error = error.localizedDescription }
@@ -1304,6 +1308,17 @@ final class AppModel: ObservableObject {
     }
 
     func shutdown() { heartbeat?.cancel(); askTask?.cancel(); scrubTask?.cancel(); archiveTask?.cancel(); rereadTask?.cancel(); meetingDetector.stop() }
+
+    /// Work that quitting would cut short: a meeting, live captions or the assistant, an answer, a
+    /// summary, an import or a model download.
+    var hasWorkInProgress: Bool {
+        func fetching(_ state: LocalSpeechModels.State) -> Bool {
+            if case .downloading = state { return true }
+            return state == .preparing
+        }
+        return meeting.isRecording || meeting.isBusy || captions.isRunning || assistant.isRunning || asking || busy
+            || !summarizing.isEmpty || modelDownload != nil || speechModels.whisper.values.contains(where: fetching) || fetching(speechModels.speakers)
+    }
 
     /// Quit and pause close the session; a power-off with recording on resumes it at the next launch.
     func endCaptureSession(poweringOff: Bool) {
@@ -1342,13 +1357,19 @@ final class AppModel: ObservableObject {
     /// takes `share` of the height. Screens saved before Reprise left the menu bar out show it;
     /// imported pictures never had one.
     func menuBarShare(of moment: Moment, screen share: Double) -> Double {
-        guard share > 0, let since = store.screensWithoutMenuBarSince, moment.timestamp < since,
-              !(moment.appName == "Imported" && moment.bundleID.isEmpty) else { return 0 }
+        Self.menuBarShare(of: moment, screen: share, since: store.screensWithoutMenuBarSince)
+    }
+
+    nonisolated static func menuBarShare(of moment: Moment, screen share: Double, since: Date?) -> Double {
+        guard share > 0, let since, moment.timestamp < since, !(moment.appName == "Imported" && moment.bundleID.isEmpty) else { return 0 }
         return share
     }
 
-    /// Screens saved before 0.8.1 lost Korean text: recognition used English first. They are read
-    /// again newest first, one at a time with a pause between them, waiting while on battery.
+    /// Reads the text of screens that have none yet, newest first, one at a time with a pause between
+    /// them, waiting while on battery: screens saved while text recognition did not answer, and
+    /// screens from before 0.8.1, which lost Korean text because recognition used English first.
+    /// While recognition does not answer, reading waits; a screen it fails on is tried again at the
+    /// next launch. With none left, it looks again every few minutes.
     private func startRereadingScreens() {
         rereadTask?.cancel()
         let store = self.store, root = self.root, cipher = self.cipher, languages = settings.ocrLanguages
@@ -1357,10 +1378,12 @@ final class AppModel: ObservableObject {
         // Utility, not background: a background-priority Vision request beside a capture stalled both.
         rereadTask = Task.detached(priority: .utility) { [weak self] in
             do { try await Task.sleep(for: .seconds(60)) } catch { return }
-            // Capture's own processor, so this never runs Vision at the same time as a capture.
+            // Capture's own lane, so this never runs Vision at the same time as a capture.
             let reader = CaptureImageProcessor.shared
             var movie: (path: String, frames: FrameReader)?
-            func text(of moment: Moment) async -> String? {
+            var unreadable: Set<String> = []
+            /// Nil when the screen's picture is gone.
+            func text(of moment: Moment) async throws -> String? {
                 var image: CGImage?
                 if !moment.imagePath.isEmpty {
                     image = AppModel.still(root.appendingPathComponent(moment.imagePath), cipher: cipher)
@@ -1369,22 +1392,37 @@ final class AppModel: ObservableObject {
                     image = try? await movie?.frames.image(at: frame.offset)
                 }
                 guard let image else { return nil }
-                // Imported pictures never had a menu bar to skip.
-                let band = moment.appName == "Imported" && moment.bundleID.isEmpty ? 0 : Int((Double(image.height) * menuBar).rounded())
-                return try? await reader.recognizeText(in: image, languages: languages, ignoringTopRows: band)
+                let share = AppModel.menuBarShare(of: moment, screen: menuBar, since: store.screensWithoutMenuBarSince)
+                return try await reader.recognizeText(in: image, languages: languages, ignoringTopRows: Int((Double(image.height) * share).rounded()))
             }
             while !Task.isCancelled {
                 if AppModel.onBattery() {
                     do { try await Task.sleep(for: .seconds(300)) } catch { return }
                     continue
                 }
-                guard let batch = try? await store.screensNeedingText(limit: 20), !batch.isEmpty else { break }
+                let batch = ((try? await store.screensNeedingText(limit: 20 + unreadable.count)) ?? []).filter { !unreadable.contains($0.id) }
+                if batch.isEmpty {
+                    await self?.setScreensToReread(0)
+                    do { try await Task.sleep(for: .seconds(300)) } catch { return }
+                    continue
+                }
                 for listed in batch {
                     guard !Task.isCancelled else { return }
-                    var recognized = await text(of: listed)
-                    // Archiving may have moved the still into a movie since the batch was read.
-                    if recognized == nil, let current = try? await store.moment(id: listed.id), current != listed {
-                        recognized = await text(of: current)
+                    let recognized: String?
+                    do {
+                        var read = try await text(of: listed)
+                        // Archiving may have moved the still into a movie since the batch was read.
+                        if read == nil, let current = try? await store.moment(id: listed.id), current != listed {
+                            read = try await text(of: current)
+                        }
+                        recognized = read
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        // Recognition that does not answer is waited for; a screen that fails otherwise waits for the next launch.
+                        if !(error is TextReadingLane.Failure) { unreadable.insert(listed.id) }
+                        do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                        break
                     }
                     // A screen that cannot be saved would come back in every batch, so stop until next launch.
                     do { try await store.saveRecognizedText(id: listed.id, text: recognized) } catch { return }
@@ -1393,7 +1431,6 @@ final class AppModel: ObservableObject {
                 let remaining = (try? await store.screensNeedingTextCount()) ?? 0
                 await self?.setScreensToReread(remaining)
             }
-            await self?.setScreensToReread(0)
         }
     }
 
@@ -1478,7 +1515,8 @@ final class AppModel: ObservableObject {
 
 actor ImageImporter {
     static let shared = ImageImporter()
-    func importFile(_ url: URL, root: URL, cipher: VaultCipher) async throws -> Moment {
+    /// A picture whose text cannot be read now is saved without it, and its text is read in the background.
+    func importFile(_ url: URL, root: URL, cipher: VaultCipher) async throws -> (moment: Moment, textRead: Bool) {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 2400, kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else {
             throw CocoaError(.fileReadCorruptFile)
@@ -1491,10 +1529,10 @@ actor ImageImporter {
         CGImageDestinationAddImage(encoder, image, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
         guard CGImageDestinationFinalize(encoder) else { throw CocoaError(.fileWriteUnknown) }
         try cipher.write(encoded as Data, to: destination)
-        let text = try await CaptureImageProcessor.shared.recognizeText(in: image, languages: ["en-US", "ko-KR"],
-                                                                        textScaleLimit: max(image.width, image.height))
+        let text = try? await CaptureImageProcessor.shared.recognizeText(in: image, languages: ["en-US", "ko-KR"],
+                                                                         textScaleLimit: max(image.width, image.height))
         let attributes = try url.resourceValues(forKeys: [.contentModificationDateKey])
         let size = (try FileManager.default.attributesOfItem(atPath: destination.path)[.size] as? NSNumber)?.int64Value ?? 0
-        return Moment(id: id, timestamp: attributes.contentModificationDate ?? Date(), appName: "Imported", windowTitle: url.lastPathComponent, text: text, imagePath: relative, thumbnailPath: relative, byteCount: size)
+        return (Moment(id: id, timestamp: attributes.contentModificationDate ?? Date(), appName: "Imported", windowTitle: url.lastPathComponent, text: text ?? "", imagePath: relative, thumbnailPath: relative, byteCount: size), text != nil)
     }
 }

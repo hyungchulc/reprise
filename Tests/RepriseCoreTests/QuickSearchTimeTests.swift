@@ -170,9 +170,14 @@ final class QuickSearchTimeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try MomentStore(root: root, keys: testKeys)
         try await store.insert(Moment(id: "screen", timestamp: Date(timeIntervalSince1970: 100), appName: "Fixture", text: "QEOE E"))
-        let pending = try await store.screensNeedingTextCount()
-        XCTAssertEqual(pending, 0)
+        // A screen saved before its text could be read waits for it.
+        try await store.insert(Moment(id: "unread", timestamp: Date(timeIntervalSince1970: 200), appName: "Fixture"), textRead: false)
+        let pending = try await store.screensNeedingText(limit: 20)
+        XCTAssertEqual(pending.map(\.id), ["unread"])
         try await store.saveRecognizedText(id: "screen", text: "오늘 회의 예산")
+        try await store.saveRecognizedText(id: "unread", text: "Approved the hiring plan")
+        let left = try await store.screensNeedingTextCount()
+        XCTAssertEqual(left, 0)
         let found = try await store.search(MomentQuery(text: "예산"))
         XCTAssertEqual(found.map(\.id), ["screen"])
         let old = try await store.search(MomentQuery(text: "QEOE"))

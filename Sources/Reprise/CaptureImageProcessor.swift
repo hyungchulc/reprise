@@ -23,18 +23,22 @@ struct PreparedCapture: Sendable {
     /// The screen's tiles and lines, so the next screen reads again only what changed. Nil when its
     /// text could not be read.
     var reading: ScreenReading? = nil
+    /// False when the text could not be read in time: the screen is saved without it and read again later.
+    var textRead = true
 }
 
-// Serial actor bounds image encoding and Vision to the single caller-owned frame.
-/// Every Vision text request in Reprise runs on the shared instance, one at a time. Two requests at
-/// once, from capture and from reading older screens again, deadlocked inside Vision and stopped
-/// capture for good (0.8.1-alpha.1 and alpha.2).
+/// Encodes and seals captured screens. Their text is read on `TextReadingLane`, where every Vision
+/// text request in Reprise runs, and a screen is saved whether or not its text could be read.
 actor CaptureImageProcessor {
     static let shared = CaptureImageProcessor()
-    /// What misread lines turned into when read again, by the languages and the text first read,
-    /// so a line that stays on screen or scrolls is read again only once.
-    private var rereads: [String: String] = [:]
-    private var rereadOrder: [String] = []
+    private let lane: TextReadingLane
+    /// How long a capture waits for its text before saving the screen without it.
+    private let textWait: TimeInterval
+
+    init(lane: TextReadingLane = .shared, textWait: TimeInterval = 20) {
+        self.lane = lane
+        self.textWait = textWait
+    }
 
     /// `ignoringTopRows` covers the menu bar. Its clock and live status items change on their own, so
     /// they neither make a screen new nor enter the searchable text, and the saved image leaves them
@@ -43,27 +47,32 @@ actor CaptureImageProcessor {
     /// are kept and only the rest is read.
     func prepare(image: CGImage, root: URL, cipher: VaultCipher, settings: CaptureSettings, previousFingerprint: String?,
                  previousReading: ScreenReading? = nil, display: UInt32? = nil,
-                 ignoringTopRows: Int = 0, textScaleLimit: Int = 2_400) throws -> PreparedCapture? {
-        try autoreleasepool {
-            let timestamp = Date()
-            guard let pixels = image.dataProvider?.data else { throw CaptureFailure("Unable to read captured image.") }
-            let band = min(max(0, ignoringTopRows), image.height - 1)
-            let data = pixels as Data
-            let fingerprint = SHA256.hash(data: data[(data.startIndex + min(data.count, band * image.bytesPerRow))...])
-                .map { String(format: "%02x", $0) }.joined()
-            if fingerprint == previousFingerprint { return nil }
-            try Task.checkCancellation()
-            var ocrWarning: String?
-            var text = ""
-            var reading: ScreenReading?
-            do {
-                reading = try read(image, pixels: data, band: band, languages: settings.ocrLanguages, display: display,
-                                   previous: previousReading, scaleLimit: textScaleLimit)
-                text = ScreenText.text(reading?.lines ?? [])
-            } catch {
-                ocrWarning = "Image saved, OCR unavailable: \(error.localizedDescription)"
+                 ignoringTopRows: Int = 0, textScaleLimit: Int = 2_400) async throws -> PreparedCapture? {
+        let timestamp = Date()
+        guard let pixels = image.dataProvider?.data else { throw CaptureFailure("Unable to read captured image.") }
+        let band = min(max(0, ignoringTopRows), image.height - 1)
+        let data = pixels as Data
+        let fingerprint = SHA256.hash(data: data[(data.startIndex + min(data.count, band * image.bytesPerRow))...])
+            .map { String(format: "%02x", $0) }.joined()
+        if fingerprint == previousFingerprint { return nil }
+        try Task.checkCancellation()
+        var ocrWarning: String?
+        var text = ""
+        var reading: ScreenReading?
+        do {
+            let languages = settings.ocrLanguages
+            reading = try await lane.run(waitingAtMost: textWait) { reader in
+                try reader.read(image, pixels: data, band: band, languages: languages, display: display,
+                                previous: previousReading, scaleLimit: textScaleLimit)
             }
-            try Task.checkCancellation()
+            text = ScreenText.text(reading?.lines ?? [])
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            ocrWarning = "Screen saved, its text is read later: \(error.localizedDescription)"
+        }
+        try Task.checkCancellation()
+        return try autoreleasepool {
             let directory = root.appendingPathComponent("captures", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let id = UUID().uuidString
@@ -93,7 +102,8 @@ actor CaptureImageProcessor {
                     bytes += (try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent(path).path)[.size] as? NSNumber)?.int64Value ?? 0
                 }
                 return PreparedCapture(timestamp: timestamp, fingerprint: fingerprint, text: text, ocrWarning: ocrWarning,
-                                       imagePath: imagePath, thumbnailPath: thumbnailPath, byteCount: bytes, reading: reading)
+                                       imagePath: imagePath, thumbnailPath: thumbnailPath, byteCount: bytes, reading: reading,
+                                       textRead: reading != nil)
             } catch {
                 try? FileManager.default.removeItem(at: root.appendingPathComponent(imagePath))
                 try? FileManager.default.removeItem(at: root.appendingPathComponent(thumbnailPath))
@@ -103,16 +113,38 @@ actor CaptureImageProcessor {
     }
 
     /// The text of a whole image, below `band` rows of menu bar.
-    func recognizeText(in image: CGImage, languages: [String], ignoringTopRows band: Int = 0, textScaleLimit: Int = 2_400) throws -> String {
+    nonisolated func recognizeText(in image: CGImage, languages: [String], ignoringTopRows band: Int = 0, textScaleLimit: Int = 2_400,
+                                   waitingAtMost limit: TimeInterval = 60) async throws -> String {
         let band = min(max(0, band), image.height - 1)
-        return ScreenText.text(try readLines(in: image, area: CGRect(x: 0, y: band, width: image.width, height: image.height - band),
-                                             languages: languages, scaleLimit: textScaleLimit))
+        return try await lane.run(waitingAtMost: limit) { reader in
+            ScreenText.text(try reader.readLines(in: image, area: CGRect(x: 0, y: band, width: image.width, height: image.height - band),
+                                                 languages: languages, scaleLimit: textScaleLimit))
+        }
     }
+
+    func remove(_ result: PreparedCapture, root: URL) {
+        for path in [result.imagePath, result.thumbnailPath] { try? FileManager.default.removeItem(at: root.appendingPathComponent(path)) }
+    }
+
+    private func encode(_ image: CGImage, type: UTType, quality: Double) -> Data? {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data as CFMutableData, type.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        return CGImageDestinationFinalize(destination) ? data as Data : nil
+    }
+}
+
+/// Reads screen text with Vision. It belongs to `TextReadingLane` and runs only on its queue.
+final class TextRecognizer {
+    /// What misread lines turned into when read again, by the languages and the text first read,
+    /// so a line that stays on screen or scrolls is read again only once.
+    private var rereads: [String: String] = [:]
+    private var rereadOrder: [String] = []
 
     /// Reads a screen: only the areas that changed since `previous` when it can be compared and
     /// little changed, otherwise the whole screen.
-    private func read(_ image: CGImage, pixels: Data, band: Int, languages: [String], display: UInt32?,
-                      previous: ScreenReading?, scaleLimit: Int) throws -> ScreenReading {
+    func read(_ image: CGImage, pixels: Data, band: Int, languages: [String], display: UInt32?,
+              previous: ScreenReading?, scaleLimit: Int) throws -> ScreenReading {
         // A pixel layout without whole bytes per pixel has no tiles, and is always read whole.
         let tiles = TileGrid(image, pixels: pixels, top: band)
         let size = CGSize(width: image.width, height: image.height)
@@ -243,26 +275,15 @@ actor CaptureImageProcessor {
         }
         return line.text
     }
+}
 
-    func remove(_ result: PreparedCapture, root: URL) {
-        for path in [result.imagePath, result.thumbnailPath] { try? FileManager.default.removeItem(at: root.appendingPathComponent(path)) }
-    }
-
-    private func encode(_ image: CGImage, type: UTType, quality: Double) -> Data? {
-        let data = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(data as CFMutableData, type.identifier as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
-        return CGImageDestinationFinalize(destination) ? data as Data : nil
-    }
-
-    private func resized(_ image: CGImage, maxDimension: Int) -> CGImage? {
-        guard max(image.width, image.height) > maxDimension else { return image }
-        let scale = Double(maxDimension) / Double(max(image.width, image.height))
-        let width = max(1, Int(Double(image.width) * scale)), height = max(1, Int(Double(image.height) * scale))
-        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
-                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        context.interpolationQuality = .high
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return context.makeImage()
-    }
+private func resized(_ image: CGImage, maxDimension: Int) -> CGImage? {
+    guard max(image.width, image.height) > maxDimension else { return image }
+    let scale = Double(maxDimension) / Double(max(image.width, image.height))
+    let width = max(1, Int(Double(image.width) * scale)), height = max(1, Int(Double(image.height) * scale))
+    guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+    context.interpolationQuality = .high
+    context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    return context.makeImage()
 }

@@ -15,7 +15,7 @@ final class CaptureEncryptionTests: XCTestCase {
                                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         context.setFillColor(CGColor(colorSpace: space, components: [0.2, 0.5, 0.8, 1])!)
         context.fill(CGRect(x: 0, y: 0, width: 640, height: 400))
-        let prepared = try await CaptureImageProcessor().prepare(image: try XCTUnwrap(context.makeImage()), root: root, cipher: testKeys.cipher,
+        let prepared = try await patientProcessor().prepare(image: try XCTUnwrap(context.makeImage()), root: root, cipher: testKeys.cipher,
                                                                   settings: CaptureSettings(), previousFingerprint: nil)
         let capture = try XCTUnwrap(prepared)
         for path in [capture.imagePath, capture.thumbnailPath] {
@@ -47,7 +47,7 @@ final class CaptureEncryptionTests: XCTestCase {
             context.fill(CGRect(x: 0, y: 380, width: 640, height: 20))
             return try XCTUnwrap(context.makeImage())
         }
-        let processor = CaptureImageProcessor()
+        let processor = patientProcessor()
         let first = try await processor.prepare(image: screen(bar: 0.1, body: 0.5), root: root, cipher: testKeys.cipher,
                                                 settings: CaptureSettings(), previousFingerprint: nil, ignoringTopRows: 20)
         let fingerprint = try XCTUnwrap(first).fingerprint

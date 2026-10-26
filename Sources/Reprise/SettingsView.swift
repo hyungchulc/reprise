@@ -117,7 +117,7 @@ struct SettingsView: View {
                 Text("English & Korean").tag("en-US,ko-KR"); Text("English").tag("en-US"); Text("Korean").tag("ko-KR"); Text("Swedish & English").tag("sv-SE,en-US")
             }
             if model.screensToReread > 0 {
-                Text("Reading text again in \(model.screensToReread) earlier screens. Versions before 0.8.1 missed Korean text. This runs slowly in the background and waits while on battery.")
+                Text("Reading text in \(model.screensToReread) screens: screens saved while text recognition was not responding, and screens from versions before 0.8.1, which missed Korean text. This runs slowly in the background and waits while on battery.")
                     .repriseFont(.caption).foregroundStyle(.secondary)
             }
             Toggle("Skip unchanged screens", isOn: $model.settings.deduplicate)

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.0-alpha.12
+
+- **Screens are saved even when text recognition stops answering.** A capture now waits at
+  most 20 seconds for a screen's text. After that the screen is saved without its text, and
+  Reprise reads the text in the background later. Before, one Vision request that never
+  returned held up every capture behind it. After the macOS 27.2 update, the first request
+  waited on the Neural Engine compiler, and no screen was saved until Reprise was restarted.
+  Imported pictures are saved the same way.
+- **Reprise restarts itself when text recognition or capture stays stuck.** This happens
+  when text recognition fails for ten minutes in a row, or when one capture runs for ten
+  minutes. Reprise restarts in the background, at most once an hour, and only when no
+  window is open and no meeting, captions, assistant, answer, import or download is running.
+  Recording comes back as it was, and the window stays closed.
+- **Background reading also covers screens saved without text**, besides screens from
+  before 0.8.1. It keeps looking for them while Reprise runs. Settings > Screen Recording
+  shows how many are left. Screens saved without the menu bar are read from their top edge.
+
 ## 0.9.0-alpha.11
 
 - **Overlay buttons take clicks across their whole cell.** Latest memory, search, screen

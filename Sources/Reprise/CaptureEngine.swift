@@ -19,6 +19,9 @@ final class CaptureEngine: ObservableObject {
     private let browser = BrowserURLReader()
     private var loop: Task<Void, Never>?
     private var busy = false
+    /// When the capture now running began. One that never ends, held by a system call that never
+    /// returns, saves nothing more until Reprise restarts.
+    private(set) var busySince: Date?
     private var generation = UUID()
     private var sleeping = false
     private var observers: [NSObjectProtocol] = []
@@ -82,8 +85,8 @@ final class CaptureEngine: ObservableObject {
 
     func captureOnce(settings: CaptureSettings) async {
         guard !busy else { skippedCount += 1; return }
-        busy = true
-        defer { busy = false }
+        busy = true; busySince = Date()
+        defer { busy = false; busySince = nil }
         let token = generation
         var prepared: PreparedCapture?
         do {
@@ -140,7 +143,7 @@ final class CaptureEngine: ObservableObject {
             let moment = Moment(timestamp: result.timestamp, appName: before.name, bundleID: before.bundleID,
                                 windowTitle: before.title, text: result.text, imagePath: result.imagePath,
                                 thumbnailPath: result.thumbnailPath, byteCount: result.byteCount, url: address)
-            try await store.insert(moment)
+            try await store.insert(moment, textRead: result.textRead)
             prepared = nil
             lastFingerprint = result.fingerprint
             lastContext = contextKey

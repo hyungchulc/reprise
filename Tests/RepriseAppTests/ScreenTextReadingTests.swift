@@ -75,7 +75,7 @@ final class ScreenTextReadingTests: XCTestCase {
                 context.setFillColor(CGColor(gray: 0.8, alpha: 1)); context.fill(CGRect(x: 0, y: 880, width: 2400, height: 20))
             }
         }
-        let processor = CaptureImageProcessor()
+        let processor = patientProcessor()
         let firstResult = try await processor.prepare(image: try page(scrolled: 0, count: 15), root: root, cipher: testKeys.cipher,
                                                       settings: CaptureSettings(), previousFingerprint: nil, ignoringTopRows: 20)
         let first = try XCTUnwrap(firstResult)
@@ -111,7 +111,7 @@ final class ScreenTextReadingTests: XCTestCase {
                 }
             }
         }
-        let processor = CaptureImageProcessor()
+        let processor = patientProcessor()
         let first = try await processor.prepare(image: try page("Reviewed the quarterly forecast"), root: root, cipher: testKeys.cipher,
                                                 settings: CaptureSettings(), previousFingerprint: nil, ignoringTopRows: 20)
         let whole = try XCTUnwrap(first)

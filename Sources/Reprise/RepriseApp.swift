@@ -95,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var powerOffObserver: NSObjectProtocol?
     private var poweringOff = false
     private var restartPending = false
+    private var captureWatch: Task<Void, Never>?
     private var terminationTask: Task<Void, Never>?
     private var terminationReady = false
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -127,8 +128,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         powerOffObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.poweringOff = true }
         }
-        if model.showOnboarding || model.preferences.showOnLaunch { explorer?.show() }
+        // A restart Reprise makes on its own comes back in the background, without its window.
+        if model.showOnboarding || (model.preferences.showOnLaunch && !UserDefaults.standard.bool(forKey: AppModel.quietLaunchKey)) { explorer?.show() }
         Task { await model.start() }
+        watchCapture()
+    }
+
+    private static let stuckRestart = "stuckCaptureRestart"
+
+    /// A system call that never returns, such as a Vision request after the macOS 27.2 update, holds
+    /// text recognition, or capture itself, until the process ends. When text recognition has failed
+    /// for ten minutes in a row or a capture has run for ten minutes, Reprise restarts itself, at most
+    /// once an hour, once no window is open and nothing would be cut short. Screens saved without
+    /// their text meanwhile are read after the restart.
+    private func watchCapture() {
+        captureWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                guard let self, let model = AppRuntime.model else { return }
+                let trouble = TextReadingLane.shared.trouble
+                let textStuck = trouble.map { $0.failures >= 5 && abs($0.since.timeIntervalSinceNow) >= 600 } ?? false
+                let captureStuck = model.capture.busySince.map { abs($0.timeIntervalSinceNow) >= 600 } ?? false
+                guard textStuck || captureStuck else { continue }
+                let last = UserDefaults.standard.object(forKey: Self.stuckRestart) as? Date
+                guard last.map({ abs($0.timeIntervalSinceNow) >= 3_600 }) ?? true, !model.hasWorkInProgress,
+                      !NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeKey }) else { continue }
+                UserDefaults.standard.set(Date(), forKey: Self.stuckRestart)
+                self.restart(quietly: true)
+                return
+            }
+        }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
@@ -166,12 +195,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return .terminateCancel
     }
 
-    private func restart() {
+    /// `quietly` opens Reprise again in the background, without its window, and ends a process that
+    /// has not quit within 20 seconds: a Vision request that never returns may hold it.
+    private func restart(quietly: Bool = false) {
         guard !restartPending, Bundle.main.bundleURL.pathExtension == "app" else { return }
         let helper = Process()
         helper.executableURL = URL(fileURLWithPath: "/bin/sh")
         // Wait for normal shutdown to finish saving audio before relaunching the same bundle.
-        helper.arguments = ["-c", "for n in $(/usr/bin/seq 1 300); do if ! kill -0 \"$1\" 2>/dev/null; then exec /usr/bin/open \"$2\"; fi; /bin/sleep 0.2; done", "reprise-restart", String(ProcessInfo.processInfo.processIdentifier), Bundle.main.bundleURL.path]
+        let script = quietly
+            ? "wait_for() { for n in $(/usr/bin/seq 1 \"$1\"); do if ! kill -0 \"$2\" 2>/dev/null; then exec /usr/bin/open -g \"$3\" --args -\(AppModel.quietLaunchKey) YES; fi; /bin/sleep 0.2; done; }; wait_for 100 \"$1\" \"$2\"; kill -KILL \"$1\"; wait_for 50 \"$1\" \"$2\""
+            : "for n in $(/usr/bin/seq 1 300); do if ! kill -0 \"$1\" 2>/dev/null; then exec /usr/bin/open \"$2\"; fi; /bin/sleep 0.2; done"
+        helper.arguments = ["-c", script, "reprise-restart", String(ProcessInfo.processInfo.processIdentifier), Bundle.main.bundleURL.path]
         helper.standardInput = FileHandle.nullDevice
         helper.standardOutput = FileHandle.nullDevice
         helper.standardError = FileHandle.nullDevice
