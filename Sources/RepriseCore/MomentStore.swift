@@ -407,6 +407,20 @@ public actor MomentStore {
         return rows
     }
 
+    /// Which of these screens wait for their text to be read, such as screens saved while text
+    /// recognition did not answer, whose text arrives later.
+    public func textPending(ids: [String]) throws -> Set<String> {
+        let statement = try prepare("SELECT 1 FROM moments WHERE id=? AND kind='screen' AND text_revision IS NULL")
+        defer { sqlite3_reset(statement); sqlite3_clear_bindings(statement) }
+        var pending = Set<String>()
+        for id in Set(ids) {
+            sqlite3_reset(statement)
+            try bind([.text(id)], to: statement)
+            if try step(statement) { pending.insert(id) }
+        }
+        return pending
+    }
+
     public func screensNeedingTextCount() throws -> Int {
         let statement = try prepare("SELECT count(*) FROM moments WHERE kind='screen' AND text_revision IS NULL")
         defer { sqlite3_reset(statement) }

@@ -252,8 +252,9 @@ final class AppModel: ObservableObject {
         let resumeCapture = UserDefaults.standard.bool(forKey: "resumeCaptureAfterRestart")
         let interrupted = UserDefaults.standard.bool(forKey: Self.captureSessionKey)
         UserDefaults.standard.removeObject(forKey: "resumeCaptureAfterRestart")
+        // After a restart Reprise made on its own, recording continues only if it was on.
         let restarted = UserDefaults.standard.bool(forKey: Self.quietLaunchKey)
-        if !showOnboarding, restarted ? resumeCapture : preferences.startRecordingOnLaunch || resumeCapture || interrupted,
+        if !showOnboarding, (preferences.startRecordingOnLaunch && !restarted) || resumeCapture || interrupted,
            CGPreflightScreenCaptureAccess() {
             await capture.start(settings: settings); appliedCaptureSettings = settings
         }

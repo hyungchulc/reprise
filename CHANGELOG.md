@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.0-alpha.13
+
+- **RepriseMCP marks screens whose text is still to be read.** `reprise_search` and
+  `reprise_get_memory` give `text_pending: true` for a screen saved before its text could be
+  read, so a reader that copies screen text elsewhere can come back for it once Reprise has
+  read it.
+- **A restart Reprise makes on its own resumes recording whenever it was on**, also when the
+  quit before it was cut short.
+
 ## 0.9.0-alpha.12
 
 - **Screens are saved even when text recognition stops answering.** A capture now waits at

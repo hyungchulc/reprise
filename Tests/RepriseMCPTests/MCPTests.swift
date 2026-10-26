@@ -50,6 +50,24 @@ final class MCPTests: XCTestCase {
         XCTAssertEqual(updated.structuredContent?.objectValue?["text"], .string("updated text"))
     }
 
+    /// A screen saved before its text could be read says so, and readers come back for its text.
+    func testScreensWaitingForTextAreMarked() async throws {
+        let root = try fixture(), store = try MomentStore(root: root, keys: testKeys)
+        try MCPAccess(enabled: true).save(root: root, keys: testKeys)
+        try await store.insert(Moment(id: "read", timestamp: Date(timeIntervalSince1970: 1), appName: "Fixture", text: "agenda"))
+        try await store.insert(Moment(id: "unread", timestamp: Date(timeIntervalSince1970: 2), appName: "Fixture"), textRead: false)
+        let service = MemoryTools(root: root, keys: testKeys)
+        let found = await service.call(name: "reprise_search", arguments: ["kind": "screen"])
+        let marks = found.structuredContent?.objectValue?["memories"]?.arrayValue?.map { $0.objectValue?["text_pending"] }
+        XCTAssertEqual(marks, [.bool(true), nil])
+        let waiting = await service.call(name: "reprise_get_memory", arguments: ["id": "unread"])
+        XCTAssertEqual(waiting.structuredContent?.objectValue?["text_pending"], .bool(true))
+        try await store.saveRecognizedText(id: "unread", text: "budget review")
+        let read = await service.call(name: "reprise_get_memory", arguments: ["id": "unread"])
+        XCTAssertEqual(read.structuredContent?.objectValue?["text_pending"], .bool(false))
+        XCTAssertEqual(read.structuredContent?.objectValue?["text"], .string("budget review"))
+    }
+
     func testFiltersInvalidArgumentsAndOverviewCoverage() async throws {
         let root = try fixture(), store = try MomentStore(root: root, keys: testKeys)
         try MCPAccess(enabled: true).save(root: root, keys: testKeys)

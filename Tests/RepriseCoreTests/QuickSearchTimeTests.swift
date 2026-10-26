@@ -174,6 +174,8 @@ final class QuickSearchTimeTests: XCTestCase {
         try await store.insert(Moment(id: "unread", timestamp: Date(timeIntervalSince1970: 200), appName: "Fixture"), textRead: false)
         let pending = try await store.screensNeedingText(limit: 20)
         XCTAssertEqual(pending.map(\.id), ["unread"])
+        let flagged = try await store.textPending(ids: ["screen", "unread", "missing"])
+        XCTAssertEqual(flagged, ["unread"])
         try await store.saveRecognizedText(id: "screen", text: "오늘 회의 예산")
         try await store.saveRecognizedText(id: "unread", text: "Approved the hiring plan")
         let left = try await store.screensNeedingTextCount()
