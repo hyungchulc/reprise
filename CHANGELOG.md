@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.0-alpha.14
+
+- **The meeting assistant waits for the others to finish asking.** It used to answer the
+  moment a line ended in a question mark, often while they were still asking. Now it answers
+  once they have been quiet for two and a half seconds, and the question runs from the start
+  of their turn to its end, with the sentences around the question mark.
+- **Answer Last Question answers in full, and only the question asked.** It waits for the
+  others to finish the line they are saying, then answers their latest turn with every point
+  that matters. Lines an answer already took in never join the next question, and each
+  question the others ask is answered apart from the answers before it, so two questions no
+  longer run together. Answers that come on their own stay brief.
+- **Answers say more.** An answer starts with a sentence that can be said as it is, then gives
+  the facts behind it, with numbers, dates, names and reasons, as points. OpenAI answers with
+  gpt-realtime-2, which reasons better than the first gpt-realtime. A lead-in such as "Let me
+  check" before a search no longer shows up in the answer.
+- **Answers from the AI & Models provider see the newest lines.** The provider read the first
+  4 KB of the transcript, its oldest lines, so a long conversation could leave out the
+  question itself. The transcript now fits whole, with the question and the lines just before it.
+
 ## 0.9.0-alpha.13
 
 - **RepriseMCP marks screens whose text is still to be read.** `reprise_search` and

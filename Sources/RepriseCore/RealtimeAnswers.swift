@@ -1,6 +1,6 @@
 import Foundation
 
-/// Short answers as text from OpenAI's Realtime API, a few characters at a time, with tools the
+/// Answers as text from OpenAI's Realtime API, a few characters at a time, with tools the
 /// app runs itself. One session stays open while it is used. The ChatGPT sign-in Codex shares
 /// works here, where the Responses API refuses it.
 public actor RealtimeAnswers {
@@ -22,7 +22,8 @@ public actor RealtimeAnswers {
         }
     }
 
-    public static let defaultModel = "gpt-realtime"
+    /// GPT-5-class reasoning with a 128K context, from May 2026; the first gpt-realtime answered thinly.
+    public static let defaultModel = "gpt-realtime-2"
 
     private let credential: @Sendable () async throws -> OpenAICredential
     private let model: String
@@ -46,6 +47,10 @@ public actor RealtimeAnswers {
         let continuation: AsyncThrowingStream<Event, Error>.Continuation
         var calls: [(id: String, name: String, arguments: String)] = []
         var items: [String] = []
+        /// The response must call a tool, so its text is a lead-in such as "Let me check", held
+        /// back and dropped once the call comes.
+        var forced = false
+        var held = ""
     }
 
     public init(model: String = RealtimeAnswers.defaultModel, instructions: String, tools: [Tool], toolFirst: Bool = false,
@@ -69,10 +74,11 @@ public actor RealtimeAnswers {
         try await task.value
     }
 
-    /// Answers one prompt; a prompt asked while another is answered waits its turn.
-    public nonisolated func answer(_ prompt: String) -> AsyncThrowingStream<Event, Error> {
+    /// Answers one prompt; a prompt asked while another is answered waits its turn. A follow-up
+    /// sees the last two exchanges; any other prompt is answered apart from them, which are let go.
+    public nonisolated func answer(_ prompt: String, followUp: Bool = true) -> AsyncThrowingStream<Event, Error> {
         let (stream, continuation) = AsyncThrowingStream<Event, Error>.makeStream()
-        let task = Task { await self.begin(prompt, continuation) }
+        let task = Task { await self.begin(prompt, followUp: followUp, continuation) }
         continuation.onTermination = { termination in if case .cancelled = termination { task.cancel() } }
         return stream
     }
@@ -107,15 +113,21 @@ public actor RealtimeAnswers {
         return session
     }
 
-    private func begin(_ prompt: String, _ continuation: AsyncThrowingStream<Event, Error>.Continuation) async {
+    private func begin(_ prompt: String, followUp: Bool, _ continuation: AsyncThrowingStream<Event, Error>.Continuation) async {
         while pending != nil { await withCheckedContinuation { waiting.append($0) } }
         guard !Task.isCancelled else { continuation.finish(throwing: CancellationError()); return }
         pending = Pending(continuation: continuation)
         do {
             try await ensureConnected()
+            if !followUp {
+                for item in exchanges.joined() { try await socket?.send(trim(item)) }
+                exchanges = []
+            }
             try await socket?.send(["type": "conversation.item.create",
                                     "item": ["type": "message", "role": "user", "content": [["type": "input_text", "text": prompt]]]])
-            try await socket?.send(toolFirst && !tools.isEmpty ? ["type": "response.create", "response": ["tool_choice": "required"]] : ["type": "response.create"])
+            let forced = toolFirst && !tools.isEmpty
+            pending?.forced = forced
+            try await socket?.send(forced ? ["type": "response.create", "response": ["tool_choice": "required"]] : ["type": "response.create"])
         } catch {
             finish(throwing: error)
         }
@@ -148,7 +160,8 @@ public actor RealtimeAnswers {
         case "conversation.item.added", "conversation.item.created":
             if let id = (event["item"] as? [String: Any])?["id"] as? String { pending?.items.append(id) }
         case "response.output_text.delta", "response.text.delta":
-            if let delta = event["delta"] as? String { pending?.continuation.yield(.text(delta)) }
+            guard let delta = event["delta"] as? String else { return }
+            if pending?.forced == true { pending?.held += delta } else { pending?.continuation.yield(.text(delta)) }
         case "response.function_call_arguments.done":
             let call = (id: event["call_id"] as? String ?? "", name: event["name"] as? String ?? "", arguments: event["arguments"] as? String ?? "{}")
             pending?.calls.append(call)
@@ -173,10 +186,15 @@ public actor RealtimeAnswers {
             finish(throwing: OpenAIRealtime.Failure("OpenAI could not answer: \(details?["message"] as? String ?? "the response failed")."))
             return
         }
-        guard !current.calls.isEmpty else { finish(); return }
+        guard !current.calls.isEmpty else {
+            // A response that was to call a tool and answered instead gives its text after all.
+            if !current.held.isEmpty { current.continuation.yield(.text(current.held)) }
+            finish(); return
+        }
         // Tools that went away since the session began are answered as gone.
         let calls = current.calls
         current.calls = []
+        current.forced = false; current.held = ""
         pending = current
         do {
             for call in calls {
@@ -197,12 +215,17 @@ public actor RealtimeAnswers {
         exchanges.append(current.items)
         while exchanges.count > 2 {
             for item in exchanges.removeFirst() {
-                trims += 1
-                let event: [String: Any] = ["type": "conversation.item.delete", "item_id": item, "event_id": "trim\(trims)"]
+                let event = trim(item)
                 Task { [socket] in try? await socket?.send(event) }
             }
         }
         if !waiting.isEmpty { waiting.removeFirst().resume() }
+    }
+
+    /// Removes an item of an earlier exchange; an error about it does not concern the answer.
+    private func trim(_ item: String) -> [String: Any] {
+        trims += 1
+        return ["type": "conversation.item.delete", "item_id": item, "event_id": "trim\(trims)"]
     }
 
     private func ended(_ error: Error) {

@@ -27,7 +27,7 @@ struct AssistantPreferences: Codable, Equatable {
     /// the first meeting language.
     var spoken = ""
     var answers = AssistantAnswerEngine.automatic
-    /// Answers questions the others ask as soon as they are asked.
+    /// Answers the others' questions on its own once they finish asking.
     var autoAnswer = true
     var useMemories = true
     /// Lets OpenAI search the web while it answers; another provider searches when memories have nothing.
@@ -70,7 +70,20 @@ final class MeetingAssistant: ObservableObject {
         let speaker: Speaker
         var text: String
         var final = false
-        let time = Date()
+        /// When the line began, and when its text last changed.
+        var time = Date()
+        var updated = Date()
+    }
+
+    /// What an answer is about: what the others said, or what the user typed.
+    struct Question: Equatable {
+        let text: String
+        /// The transcript lines it was heard in, oldest first; none when typed.
+        var lines: [UUID] = []
+        /// Asked on its own once the others finished, rather than by a click.
+        var automatic = false
+        /// A heard question is answered on its own; a typed one may follow up the answer before it.
+        var heard: Bool { !lines.isEmpty }
     }
 
     struct Answer: Identifiable, Equatable {
@@ -79,6 +92,8 @@ final class MeetingAssistant: ObservableObject {
         let id = UUID()
         let question: String
         let automatic: Bool
+        /// Heard from the others, rather than typed by the user.
+        var heard = true
         var text = ""
         var state = State.thinking
         /// Memories the answer cites, by label.
@@ -122,7 +137,13 @@ final class MeetingAssistant: ObservableObject {
     /// After OpenAI fails, Automatic answers go straight to the provider for a while instead of waiting on it each time.
     private var openAIRetry = Date.distantPast
     private var answering: Task<Void, Never>?
-    private var queued: (question: String, automatic: Bool)?
+    private var queued: Question?
+    /// Lines an answer has taken in, so a later question never takes them in again.
+    private var answered = Set<UUID>()
+    /// The wait for the others to finish before their question is answered on its own.
+    private var autoAnswering: Task<Void, Never>?
+    /// A click waiting for the others to finish what they are saying.
+    private var settling: Task<Void, Never>?
     private var pauses: [Speaker: Task<Void, Never>] = [:]
     private var noticeClear: Task<Void, Never>?
     /// Memory labels go up through a meeting, so a follow-up never reuses one.
@@ -182,7 +203,7 @@ final class MeetingAssistant: ObservableObject {
         halt()
         isRunning = false
         lines = []; answers = []; lastQuestion = nil; notice = nil; problem = nil; draft = ""
-        labels = 0; found = [:]; pageLabels = 0; pagesFound = [:]
+        labels = 0; found = [:]; pageLabels = 0; pagesFound = [:]; answered = []
     }
 
     /// Applies changed answer tools, such as web search or MCP servers, without starting over.
@@ -202,6 +223,8 @@ final class MeetingAssistant: ObservableObject {
         Task { await hub.disconnectAll() }
         speech.values.forEach { $0.stop() }
         answering?.cancel(); answering = nil; queued = nil
+        autoAnswering?.cancel(); autoAnswering = nil
+        settling?.cancel(); settling = nil
         pauses.values.forEach { $0.cancel() }; pauses = [:]
         let session = openAI
         openAI = nil
@@ -227,11 +250,12 @@ final class MeetingAssistant: ObservableObject {
         case .streamed(let piece):
             append(piece, from: speaker)
         case .finished(let utterance):
-            if let index = openLine(speaker), lines[index].text.isEmpty { lines[index].text = utterance }
+            if let index = openLine(speaker), lines[index].text.isEmpty { lines[index].text = utterance; changed(index) }
             close(speaker)
         case .phrase(let spoken, _, let final):
             let index = openLine(speaker) ?? newLine(speaker)
             lines[index].text = spoken
+            changed(index)
             if final { close(speaker) }
         case .spoken: break
         case .notice(let message): show(message)
@@ -255,10 +279,17 @@ final class MeetingAssistant: ObservableObject {
         return lines.count - 1
     }
 
+    /// Notes when a line's text changed. While the others are still talking, their question waits.
+    private func changed(_ index: Int) {
+        lines[index].updated = Date()
+        if lines[index].speaker == .them { autoAnswering?.cancel(); autoAnswering = nil }
+    }
+
     /// Streamed text joins the open line; a sentence end or a pause closes it.
     private func append(_ piece: String, from speaker: Speaker) {
         let index = openLine(speaker) ?? newLine(speaker)
         lines[index].text += lines[index].text.isEmpty ? piece.trimmingCharacters(in: .whitespaces) : piece
+        changed(index)
         pauses[speaker]?.cancel()
         if CaptionLayout.endsSentence(piece) {
             close(speaker)
@@ -277,10 +308,9 @@ final class MeetingAssistant: ObservableObject {
         lines[index].final = true
         let text = lines[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { lines.remove(at: index); return }
-        if speaker == .them, Self.isQuestion(text) {
-            lastQuestion = text
-            if preferences.autoAnswer { ask(text, automatic: true) }
-        }
+        guard speaker == .them else { return }
+        if Self.isQuestion(text) { lastQuestion = text }
+        answerWhenTheyFinish()
     }
 
     nonisolated static func isQuestion(_ text: String) -> Bool {
@@ -288,14 +318,79 @@ final class MeetingAssistant: ObservableObject {
         return last == "?" || last == "？"
     }
 
+    // MARK: Questions
+
+    /// How long the others stay quiet before their question is answered on its own. A question
+    /// mark is no sign that they are done: many go on with another sentence.
+    nonisolated static let finishPause: TimeInterval = 2.5
+    /// A pause this long between the others' lines starts a new turn of theirs.
+    nonisolated static let turnGap: TimeInterval = 6
+    /// How long a click waits for the others to finish the line they are saying.
+    nonisolated static let clickWait: TimeInterval = 4
+    /// The most lines a question takes in; earlier lines of a long turn stay context.
+    nonisolated static let questionLines = 5
+
+    /// The others' question: the lines of their latest turn that no answer has taken in yet, so an
+    /// answered question never mixes into the next one. A turn ends at a line of the user's or at
+    /// a pause of `turnGap`. An automatic answer needs a question among the last three lines; a
+    /// click answers whatever the others said last, and their whole turn again when every line of
+    /// it was answered.
+    nonisolated static func question(in lines: [Line], answered: Set<UUID>, automatic: Bool) -> Question? {
+        func said(_ line: Line) -> Bool { !line.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard let end = lines.lastIndex(where: { $0.speaker == .them && said($0) }) else { return nil }
+        var turn = [lines[end]]
+        for line in lines[..<end].reversed() where said(line) {
+            guard line.speaker == .them, turn[0].time.timeIntervalSince(line.updated) < turnGap else { break }
+            turn.insert(line, at: 0)
+        }
+        var taken = turn.lastIndex(where: { answered.contains($0.id) }).map { Array(turn[($0 + 1)...]) } ?? turn
+        if taken.isEmpty {
+            guard !automatic else { return nil }
+            taken = turn
+        }
+        if automatic, !taken.suffix(3).contains(where: { isQuestion($0.text) }) { return nil }
+        taken = Array(taken.suffix(questionLines))
+        return Question(text: taken.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }.joined(separator: " "),
+                        lines: taken.map(\.id), automatic: automatic)
+    }
+
+    /// After a line of theirs, waits until the others have finished, then answers their question if they asked one.
+    private func answerWhenTheyFinish() {
+        autoAnswering?.cancel(); autoAnswering = nil
+        guard preferences.autoAnswer, Self.question(in: lines, answered: answered, automatic: true) != nil else { return }
+        autoAnswering = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.finishPause))
+            guard let self, !Task.isCancelled else { return }
+            self.autoAnswering = nil
+            guard self.preferences.autoAnswer, !self.themSpeaking,
+                  let question = Self.question(in: self.lines, answered: self.answered, automatic: true) else { return }
+            self.ask(question)
+        }
+    }
+
+    /// The others are in the middle of a line.
+    private var themSpeaking: Bool {
+        openLine(.them).map { !lines[$0].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? false
+    }
+
     // MARK: Answers
 
-    /// Answers the last question the others asked, or else what they said last.
+    /// Answers the others' last question in full once they finish the line they are saying.
     func answerLast() {
-        if let question = lastQuestion ?? lines.last(where: { $0.speaker == .them && !$0.text.isEmpty })?.text {
-            ask(question, automatic: false)
-        } else {
-            show("No question heard yet.")
+        guard isRunning else { return }
+        guard lines.contains(where: { $0.speaker == .them && !$0.text.isEmpty }) else { show("No question heard yet."); return }
+        settling?.cancel()
+        settling = Task { [weak self] in
+            guard let self else { return }
+            if self.themSpeaking { self.show("Waiting for them to finish...") }
+            let started = Date()
+            while self.themSpeaking, Date().timeIntervalSince(started) < Self.clickWait {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard !Task.isCancelled else { return }
+            }
+            guard !Task.isCancelled else { return }
+            self.settling = nil
+            if let question = Self.question(in: self.lines, answered: self.answered, automatic: false) { self.ask(question) }
         }
     }
 
@@ -303,28 +398,33 @@ final class MeetingAssistant: ObservableObject {
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
         draft = ""
-        ask(question, automatic: false)
+        ask(Question(text: question))
     }
 
-    /// One question at a time; the newest waiting question goes next, and one typed or asked by
-    /// shortcut goes before one heard.
-    func ask(_ question: String, automatic: Bool) {
+    /// One question at a time; the newest waiting question goes next, and one typed or clicked goes
+    /// before one answered on its own.
+    func ask(_ question: Question) {
         guard isRunning else { return }
+        answered.formUnion(question.lines)
+        // A click answers what the others said, so their question does not also answer itself.
+        if question.heard, !question.automatic { autoAnswering?.cancel(); autoAnswering = nil }
         if answering != nil {
-            if !automatic || queued?.automatic != false { queued = (question, automatic) }
+            if !question.automatic || queued?.automatic != false {
+                queued = question
+                if !question.automatic { show("Answers this after the current answer.") }
+            }
             return
         }
-        answers.append(Answer(question: question, automatic: automatic))
+        answers.append(Answer(question: question.text, automatic: question.automatic, heard: question.heard))
         if answers.count > 6 { answers.removeFirst(answers.count - 6) }
         let id = answers[answers.count - 1].id
-        let prompt = Self.prompt(question: question, lines: lines, fromThem: automatic)
         answering = Task { [weak self] in
-            await self?.answer(id, question: question, prompt: prompt)
+            await self?.answer(id, question)
             guard let self, !Task.isCancelled else { return }
             self.answering = nil
             if let next = self.queued {
                 self.queued = nil
-                self.ask(next.question, automatic: next.automatic)
+                self.ask(next)
             }
         }
     }
@@ -332,9 +432,13 @@ final class MeetingAssistant: ObservableObject {
     /// What the answer model is told, with a part for each kind of tool it has.
     nonisolated static func instructions(memories: Bool, web: Bool, tools: Bool) -> String {
         var parts = ["""
-        You are Reprise's meeting assistant. The user is in a live meeting and needs an answer they can use right away.
-        Answer in the language of the question, in one to three short sentences, with no preamble.
-        Use the transcript for what was said; You is the user and Them is everyone else.
+        You are Reprise's meeting assistant. The user is in a live meeting and reads your answer at a glance while they talk.
+        Answer in the language of the question. Start with the answer itself in one or two sentences the user can say as they
+        are, with no preamble. Then give the points that help them go further, such as the facts behind the answer with
+        numbers, dates, names and reasons, a caveat, or a question to ask back, each on its own line starting with "- ".
+        Each request says how much to give. Answer only the question it names: the transcript around it is context for what
+        it refers to, You is the user and Them is everyone else, and lines marked (answered) were answered before. Never say
+        that you are about to search; call the tool, then answer.
         """]
         if memories {
             parts.append("""
@@ -371,30 +475,80 @@ final class MeetingAssistant: ObservableObject {
     {"type":"object","properties":{"terms":{"type":"array","items":{"type":"string"},"description":"One to four short keyword phrases of one or two words, each searched on its own, such as a product, a person or a topic, in the language they were likely written in. Every word of a phrase must appear in a memory."},"days":{"type":"integer","description":"How many days back to look; leave it out to search everything."}},"required":["terms"]}
     """
 
-    /// The recent transcript, newest last, then the question.
-    nonisolated static func prompt(question: String, lines: [Line], fromThem: Bool, now: Date = Date()) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
-        var transcript: [String] = []
-        var size = 0
-        for line in lines.reversed() where now.timeIntervalSince(line.time) < 240 && !line.text.isEmpty {
-            let row = "[\(formatter.string(from: line.time))] \(line.speaker.rawValue): \(line.text)"
-            size += row.count
-            if size > 6_000 { break }
-            transcript.insert(row, at: 0)
-        }
-        let heard = transcript.isEmpty ? "(nothing heard yet)" : transcript.joined(separator: "\n")
-        return "Recent meeting transcript:\n\(heard)\n\n\(fromThem ? "Question from Them" : "The user asks"): \(question)"
+    /// How much an answer gives; one that comes on its own is read while the others wait.
+    nonisolated static func length(_ question: Question) -> String {
+        question.automatic ? "Answer briefly: the answer, then at most three points."
+            : "Answer in full: the answer, then every point that matters, at most six."
     }
 
-    private func answer(_ id: UUID, question: String, prompt: String) async {
+    /// What the answer model reads, at most `limit` bytes of UTF-8. A heard question comes with the
+    /// lines just before it as context, those already answered marked, and what was said since; a
+    /// typed one with the recent conversation. The question goes in first, then context from the
+    /// newest line back while it fits.
+    nonisolated static func prompt(_ question: Question, lines: [Line], answered: Set<UUID>, limit: Int = 8_000, now: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        func row(_ line: Line) -> String {
+            let mark = answered.contains(line.id) && !question.lines.contains(line.id) ? " (answered)" : ""
+            return "[\(formatter.string(from: line.time))] \(line.speaker.rawValue): \(line.text.trimmingCharacters(in: .whitespacesAndNewlines))\(mark)"
+        }
+        let spoken = lines.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let length = Self.length(question)
+        // Headers and the closing line take under 160 bytes.
+        var budget = limit - length.utf8.count - 160
+        let asked = tail(question.text, bytes: min(2_000, max(200, budget / 2)))
+        budget -= asked.utf8.count
+        func fit(_ candidates: some Collection<Line>) -> [String] {
+            var rows: [String] = []
+            for line in candidates.reversed() {
+                let text = row(line)
+                guard text.utf8.count + 1 <= budget else { break }
+                budget -= text.utf8.count + 1
+                rows.insert(text, at: 0)
+            }
+            return rows
+        }
+        if let first = question.lines.first.flatMap({ id in spoken.firstIndex { $0.id == id } }),
+           let last = question.lines.last.flatMap({ id in spoken.lastIndex { $0.id == id } }) {
+            let since = fit(spoken[(last + 1)...].prefix(4))
+            let start = spoken[first].time
+            let before = fit(spoken[..<first].filter { start.timeIntervalSince($0.time) < 180 }.suffix(8))
+            var parts: [String] = []
+            if !before.isEmpty { parts.append("Earlier in the meeting, for context only:\n" + before.joined(separator: "\n")) }
+            parts.append("Question from Them to answer now:\n\(asked)")
+            if !since.isEmpty { parts.append("Said since:\n" + since.joined(separator: "\n")) }
+            parts.append("Answer only the question to answer now. \(length)")
+            return parts.joined(separator: "\n\n")
+        }
+        let recent = fit(spoken.filter { now.timeIntervalSince($0.time) < 600 })
+        let heard = recent.isEmpty ? "(nothing heard yet)" : recent.joined(separator: "\n")
+        return "Recent meeting transcript:\n\(heard)\n\n\(question.heard ? "Question from Them" : "The user asks"): \(asked)\n\n\(length)"
+    }
+
+    /// The end of `text` within `bytes` of UTF-8, in whole characters; the end of a long question
+    /// is where it is asked.
+    nonisolated static func tail(_ text: String, bytes: Int) -> String {
+        guard text.utf8.count > bytes else { return text }
+        var start = text.endIndex, size = 0
+        while start > text.startIndex {
+            let previous = text.index(before: start)
+            let next = text[previous].utf8.count
+            guard size + next <= bytes - 3 else { break }
+            size += next
+            start = previous
+        }
+        return "…" + text[start...]
+    }
+
+    private func answer(_ id: UUID, _ question: Question) async {
         let engine = preferences.answers
         if engine == .openAI || engine == .automatic && openAIRetry <= Date() {
-            let answered = await answerWithOpenAI(id, prompt: prompt, fallBack: engine == .automatic)
-            if answered || engine == .openAI { return }
+            let prompt = Self.prompt(question, lines: lines, answered: answered)
+            let done = await answerWithOpenAI(id, prompt: prompt, followUp: !question.heard, fallBack: engine == .automatic)
+            if done || engine == .openAI { return }
             openAIRetry = Date().addingTimeInterval(120)
         }
-        await answerWithProvider(id, question: question, prompt: prompt)
+        await answerWithProvider(id, question: question)
     }
 
     /// The OpenAI answer session, opened ahead of the first question.
@@ -481,18 +635,20 @@ final class MeetingAssistant: ObservableObject {
         return name
     }
 
-    /// False when OpenAI could not start and another engine may take over.
-    private func answerWithOpenAI(_ id: UUID, prompt: String, fallBack: Bool) async -> Bool {
+    /// False when OpenAI could not start and another engine may take over. A follow-up keeps the
+    /// exchanges before it; a heard question is answered apart from them.
+    private func answerWithOpenAI(_ id: UUID, prompt: String, followUp: Bool, fallBack: Bool) async -> Bool {
         let openAI = openAnswers()
         answerFound = []; answerPages = []
         do {
-            for try await event in openAI.answer(prompt) {
+            for try await event in openAI.answer(prompt, followUp: followUp) {
                 switch event {
                 case .text(let piece):
                     update(id) { $0.text += piece; $0.state = .answering }
                 case .tool(let name, let arguments):
+                    // Text before a tool call is a lead-in such as "Let me check", not the answer.
                     let activity = activity(name, arguments)
-                    update(id) { $0.state = .working(activity) }
+                    update(id) { $0.text = ""; $0.state = .working(activity) }
                 }
             }
             // Sources the answer names; when it names none, the first ones its searches returned.
@@ -531,8 +687,12 @@ final class MeetingAssistant: ObservableObject {
         }
     }
 
-    private func answerWithProvider(_ id: UUID, question: String, prompt: String) async {
+    private func answerWithProvider(_ id: UUID, question asked: Question) async {
         let configuration = provider()
+        let question = asked.text
+        // The provider reads each piece of evidence up to 4 KB from its start, so the transcript is
+        // made to fit whole, the question with it.
+        let prompt = Self.prompt(asked, lines: lines, answered: answered, limit: 3_800)
         var moments = [Moment(id: "transcript", appName: "Meeting", windowTitle: "Live transcript", text: prompt, kind: "meeting")]
         var labeled: [(label: String, moment: Moment)] = []
         if preferences.useMemories,
@@ -552,7 +712,9 @@ final class MeetingAssistant: ObservableObject {
         }
         update(id) { $0.state = .thinking }
         do {
-            let response = try await ai.answer(question: question, moments: moments, configuration: configuration)
+            let request = Self.tail(question, bytes: 6_000) + "\n\n" + Self.length(asked)
+                + " Start with the answer itself, then put each point on its own line starting with \"- \"."
+            let response = try await ai.answer(question: request, moments: moments, configuration: configuration)
             // The provider labels the transcript M1 and the memories after it.
             let sources = response.citations.compactMap { citation in
                 labeled.first(where: { $0.moment.id == citation.momentID }).map { (label: citation.label, moment: $0.moment) }

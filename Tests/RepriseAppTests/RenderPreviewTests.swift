@@ -86,12 +86,12 @@ final class RenderPreviewTests: XCTestCase {
                      Line(speaker: .you, text: "네, 잠깐만요. 확인해 볼게요")]
         for index in 0..<3 { lines[index].final = true }
         var answered = MeetingAssistant.Answer(question: "Quick question. When is the Orion launch now?", automatic: true)
-        answered.text = "Orion now launches on November 12 [M1], moved from November 5 after the security review [M2]."
+        answered.text = "Orion now launches on November 12 [M1].\n- It moved from November 5 after the security review [M2].\n- The announcement still goes out the week before, on **November 5**."
         answered.state = .done
         let slack = Moment(id: "m1", appName: "Slack", windowTitle: "#orion - Launch moved to November 12", text: "", kind: "screen")
         let notes = Moment(id: "m2", appName: "Notes", windowTitle: "Orion security review", text: "", kind: "screen")
         answered.sources = [("M1", slack), ("M2", notes)]
-        var searching = MeetingAssistant.Answer(question: "Who owns the security review?", automatic: false)
+        var searching = MeetingAssistant.Answer(question: "Who owns the security review?", automatic: false, heard: false)
         searching.state = .working("Searching the web for Orion security review owner")
         answered.pages = [("W1", WebSearchResult.Source(title: "Orion launch moves to November", url: "https://www.example.com/orion"))]
         model.assistant.preview(lines: lines, answers: [answered, searching], heardBy: [.you: "OpenAI", .them: "OpenAI"])

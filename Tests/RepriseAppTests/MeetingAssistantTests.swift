@@ -9,12 +9,55 @@ final class MeetingAssistantTests: XCTestCase {
         XCTAssertTrue(MeetingAssistant.isQuestion("When is the launch?"))
         XCTAssertTrue(MeetingAssistant.isQuestion("출시는 언제예요？ "))
         XCTAssertFalse(MeetingAssistant.isQuestion("The launch is in November."))
-        let lines = [MeetingAssistant.Line(speaker: .them, text: "When is the Orion launch?"), MeetingAssistant.Line(speaker: .you, text: "Let me check.")]
-        let prompt = MeetingAssistant.prompt(question: "When is the Orion launch?", lines: lines, fromThem: true)
-        XCTAssertTrue(prompt.contains("Them: When is the Orion launch?"))
-        XCTAssertTrue(prompt.contains("You: Let me check."))
-        XCTAssertTrue(prompt.hasSuffix("Question from Them: When is the Orion launch?"))
+        let typed = MeetingAssistant.prompt(MeetingAssistant.Question(text: "When is the Orion launch?"),
+                                            lines: [MeetingAssistant.Line(speaker: .you, text: "Let me check.")], answered: [])
+        XCTAssertTrue(typed.contains("You: Let me check."))
+        XCTAssertTrue(typed.contains("The user asks: When is the Orion launch?"))
+        XCTAssertTrue(typed.hasSuffix(MeetingAssistant.length(MeetingAssistant.Question(text: "x"))))
         XCTAssertEqual(MeetingAssistant.keywords("Quick question: when is the Orion launch now?"), ["launch", "Orion"])
+    }
+
+    /// The others' question runs from the start of their turn to its end, and never takes in one already answered.
+    func testQuestionIsTheirWholeTurnApartFromAnsweredOnes() throws {
+        let start = Date()
+        func line(_ speaker: MeetingAssistant.Speaker, _ text: String, at seconds: TimeInterval) -> MeetingAssistant.Line {
+            MeetingAssistant.Line(speaker: speaker, text: text, final: true, time: start.addingTimeInterval(seconds), updated: start.addingTimeInterval(seconds + 1))
+        }
+        var lines = [line(.them, "Thanks for joining.", at: 0),
+                     line(.you, "Happy to be here.", at: 3),
+                     line(.them, "Quick question.", at: 6),
+                     line(.them, "When is the Orion launch now?", at: 8),
+                     line(.them, "The client keeps asking.", at: 10)]
+        // On its own: their turn since the user's line, with the sentence after the question mark.
+        let first = try XCTUnwrap(MeetingAssistant.question(in: lines, answered: [], automatic: true))
+        XCTAssertEqual(first.text, "Quick question. When is the Orion launch now? The client keeps asking.")
+        XCTAssertEqual(first.lines, lines[2...].map(\.id))
+        // Once answered it does not answer itself again, and a click answers it again whole.
+        var answered = Set(first.lines)
+        XCTAssertNil(MeetingAssistant.question(in: lines, answered: answered, automatic: true))
+        XCTAssertEqual(MeetingAssistant.question(in: lines, answered: answered, automatic: false)?.lines, first.lines)
+        // What they go on to ask is a question of its own, with the answered one only as context.
+        lines.append(line(.them, "And who signed off on the security review?", at: 13))
+        let next = try XCTUnwrap(MeetingAssistant.question(in: lines, answered: answered, automatic: true))
+        XCTAssertEqual(next.text, "And who signed off on the security review?")
+        answered.formUnion(next.lines)
+        let prompt = MeetingAssistant.prompt(next, lines: lines, answered: answered)
+        XCTAssertTrue(prompt.contains("Them: When is the Orion launch now? (answered)"), prompt)
+        XCTAssertTrue(prompt.contains("Question from Them to answer now:\nAnd who signed off on the security review?"), prompt)
+        XCTAssertFalse(prompt.contains("security review? (answered)"), prompt)
+        // A long pause starts a new turn; a request without a question mark waits for a click.
+        lines.append(line(.them, "Tell me about the rollout plan.", at: 40))
+        XCTAssertNil(MeetingAssistant.question(in: lines, answered: answered, automatic: true))
+        XCTAssertEqual(MeetingAssistant.question(in: lines, answered: answered, automatic: false)?.text, "Tell me about the rollout plan.")
+        // A provider reads 4 KB of transcript; what fits keeps the end of the question and the newest lines.
+        let sentence = String(repeating: "출시 일정과 보안 검토 이야기를 길게 이어가는 중입니다. ", count: 4)
+        var talk = (0..<40).map { line(.them, sentence + "\($0)", at: Double($0) * 2) }
+        talk.append(line(.them, "그래서 출시는 언제예요?", at: 81))
+        let asked = try XCTUnwrap(MeetingAssistant.question(in: talk, answered: [], automatic: false))
+        let small = MeetingAssistant.prompt(asked, lines: talk, answered: [], limit: 3_800)
+        XCTAssertLessThanOrEqual(small.utf8.count, 3_800)
+        XCTAssertTrue(small.contains("그래서 출시는 언제예요?\n"), small)
+        XCTAssertTrue(small.contains(" 35\n"), "the newest line before the question stays")
     }
 
     func testCitedMemoriesFollowTheAnswer() {
@@ -47,10 +90,14 @@ final class MeetingAssistantTests: XCTestCase {
         let store = try MomentStore(root: root, keys: testKeys)
         try await store.insert(Moment(timestamp: Date().addingTimeInterval(-86_400), appName: "Slack", windowTitle: "#orion",
                                       text: "Heads up: the Orion launch moved to November 12 after the security review."))
+        try await store.insert(Moment(timestamp: Date().addingTimeInterval(-7_200), appName: "Mail", windowTitle: "Orion security review",
+                                      text: "Priya Raman signed off on the Orion security review on Tuesday."))
         let assistant = MeetingAssistant(store: store, ai: AIClient())
+        // Two questions with a pause between: each is answered on its own, once it is finished.
         assistant.setFeed(.them) { _, rate, deliver, _ in
-            SpokenFeed(samples: (try? LiveCaptionTests.speech(voice: "Samantha", text: "Quick question. When is the Orion launch now?", rate: rate)) ?? [],
-                       rate: rate, deliver: deliver)
+            let first = (try? LiveCaptionTests.speech(voice: "Samantha", text: "Quick question. When is the Orion launch now?", rate: rate)) ?? []
+            let second = (try? LiveCaptionTests.speech(voice: "Samantha", text: "And who signed off on the security review?", rate: rate)) ?? []
+            return SpokenFeed(samples: first + [Float](repeating: 0, count: Int(rate * 6)) + second, rate: rate, deliver: deliver)
         }
         assistant.setFeed(.you) { _, rate, deliver, _ in SpokenFeed(samples: [], rate: rate, deliver: deliver) }
         var preferences = AssistantPreferences()
@@ -62,22 +109,44 @@ final class MeetingAssistantTests: XCTestCase {
         defer { assistant.stop() }
         var firstText: TimeInterval?, heardAt: TimeInterval?
         var searched: [String] = []
-        while Date().timeIntervalSince(started) < 60 {
+        while Date().timeIntervalSince(started) < 90 {
             if heardAt == nil, assistant.lastQuestion != nil { heardAt = Date().timeIntervalSince(started) }
             if let answer = assistant.answers.first {
                 if case .working(let terms) = answer.state, searched.last != terms { searched.append(terms) }
                 if firstText == nil, !answer.text.isEmpty { firstText = Date().timeIntervalSince(started) }
-                if answer.state == .done { break }
-                if case .failed(let message) = answer.state { XCTFail(message); break }
             }
+            if assistant.answers.count == 2, assistant.answers.allSatisfy({ $0.state == .done }) { break }
+            if let failed = assistant.answers.first(where: { if case .failed = $0.state { true } else { false } }) { XCTFail("\(failed.state)"); break }
             if let problem = assistant.problem { XCTFail(problem); break }
             try await Task.sleep(for: .milliseconds(100))
         }
-        let answer = try XCTUnwrap(assistant.answers.first)
-        print("Assistant heard \(assistant.lines.map { "\($0.speaker.rawValue): \($0.text)" }) question at \(heardAt.map { String(format: "%.1f s", $0) } ?? "-"), answer text at \(firstText.map { String(format: "%.1f s", $0) } ?? "-"), searched \(searched): \(answer.text) sources \(answer.sources.map(\.label))")
-        XCTAssertTrue(answer.automatic)
-        XCTAssertTrue(answer.text.contains("12"), answer.text)
-        XCTAssertEqual(answer.sources.first?.moment.appName, "Slack")
+        print("Assistant heard \(assistant.lines.map { "\($0.speaker.rawValue): \($0.text)" }) first question at \(heardAt.map { String(format: "%.1f s", $0) } ?? "-"), first answer text at \(firstText.map { String(format: "%.1f s", $0) } ?? "-"), searched \(searched)")
+        for answer in assistant.answers { print("Asked: \(answer.question)\n\(answer.text)\nsources \(answer.sources.map(\.label)) \(answer.sources.map(\.moment.appName))") }
+        XCTAssertEqual(assistant.answers.count, 2)
+        let launch = try XCTUnwrap(assistant.answers.first), review = try XCTUnwrap(assistant.answers.last)
+        XCTAssertTrue(launch.automatic)
+        XCTAssertTrue(launch.question.contains("Orion launch"), launch.question)
+        XCTAssertFalse(launch.question.contains("signed"), launch.question)
+        XCTAssertTrue(launch.text.contains("12"), launch.text)
+        XCTAssertFalse(launch.text.lowercased().contains("checking"), "a lead-in before the search is no part of the answer: \(launch.text)")
+        XCTAssertEqual(launch.sources.first?.moment.appName, "Slack")
+        XCTAssertTrue(review.question.contains("signed off"), review.question)
+        XCTAssertFalse(review.question.contains("launch"), review.question)
+        XCTAssertTrue(review.text.contains("Priya"), review.text)
+        // A click answers the last question again, in full, and only that question.
+        assistant.answerLast()
+        let clicked = Date()
+        while Date().timeIntervalSince(clicked) < 60, assistant.answers.count < 3 || assistant.answers.last?.state != .done {
+            if case .failed(let message) = assistant.answers.last?.state { XCTFail(message); break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let full = try XCTUnwrap(assistant.answers.last)
+        print("Clicked, answered in \(String(format: "%.1f", Date().timeIntervalSince(clicked))) s. Asked: \(full.question)\n\(full.text)")
+        XCTAssertEqual(assistant.answers.count, 3)
+        XCTAssertFalse(full.automatic)
+        XCTAssertEqual(full.question, review.question)
+        XCTAssertTrue(full.text.contains("Priya"), full.text)
+        XCTAssertFalse(full.text.lowercased().contains("let me"), full.text)
     }
 }
 

@@ -43,7 +43,9 @@ struct AssistantSettings: View {
     }
 
     @ViewBuilder private var answers: some View {
-        Toggle("Answer the others' questions as they ask them", isOn: $model.preferences.assistant.autoAnswer)
+        Toggle("Answer the others' questions once they finish asking", isOn: $model.preferences.assistant.autoAnswer)
+        Text("Answers that come on their own are brief. Answer Last Question answers what the others asked last in full, apart from the questions already answered.")
+            .repriseFont(.caption).foregroundStyle(.secondary)
         Toggle("Search my memories", isOn: $model.preferences.assistant.useMemories)
         Picker("Answers by", selection: $model.preferences.assistant.answers) {
             ForEach(AssistantAnswerEngine.allCases) { Text($0.title).tag($0) }
@@ -84,9 +86,9 @@ extension AssistantAnswerEngine {
         case .automatic:
             "OpenAI answers within about a second when the account below works. Otherwise the provider chosen in AI & Models answers, which takes longer."
         case .openAI:
-            "OpenAI's Realtime model starts answering within about a second and searches your memories as it answers. The question, the last few minutes of the conversation and the memories it finds go to OpenAI."
+            "OpenAI's Realtime model starts answering within about a second and searches your memories as it answers. The question, the lines around it and the memories it finds go to OpenAI."
         case .provider:
-            "The provider chosen in AI & Models answers from the last few minutes of the conversation and from memories that match the question's words. With Apple on-device or Ollama, nothing leaves this Mac. Answers take longer than with OpenAI."
+            "The provider chosen in AI & Models answers from the question, the lines around it and memories that match its words. With Apple on-device or Ollama, nothing leaves this Mac. Answers take longer than with OpenAI."
         }
     }
 }

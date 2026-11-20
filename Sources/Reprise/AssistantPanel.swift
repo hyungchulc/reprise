@@ -140,15 +140,16 @@ private struct AssistantAnswers: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     if answers.isEmpty {
-                        Text("Answers show here when the others ask a question, or when you ask one below.")
+                        Text("Answers show here once the others finish asking a question, or when you ask one below.")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                     ForEach(answers.suffix(3)) { answer in AssistantAnswerCard(answer: answer, open: open).id(answer.id) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading).padding(12)
             }
-            .onChange(of: answers.last?.text) { _, _ in
-                if let last = answers.last { proxy.scrollTo(last.id, anchor: .bottom) }
+            // A new answer shows from its start, where the answer itself is, and stays put while the rest arrives.
+            .onChange(of: answers.last?.id) { _, _ in
+                if let last = answers.last { withAnimation { proxy.scrollTo(last.id, anchor: .top) } }
             }
         }
     }
@@ -159,10 +160,10 @@ private struct AssistantAnswerCard: View {
     let open: (Moment) -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("\(answer.automatic ? "Asked" : "You asked"): \(answer.question)")
+            Text("\(answer.heard ? "Asked" : "You asked"): \(answer.question)")
                 .font(.caption).foregroundStyle(.secondary).lineLimit(3)
             if !answer.text.isEmpty {
-                Text(answer.text).font(.body).textSelection(.enabled)
+                AnswerText(text: answer.text)
             }
             state
             if !answer.sources.isEmpty || !answer.pages.isEmpty {
@@ -207,6 +208,44 @@ private struct AssistantAnswerCard: View {
     }
 }
 
+/// An answer's text: lines that start with "- " show as points with their own indent, and
+/// emphasis the model adds shows as such.
+struct AnswerText: View {
+    let text: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(Self.paragraphs(text).enumerated()), id: \.offset) { _, paragraph in
+                if paragraph.point {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("•").foregroundStyle(.secondary)
+                        Self.styled(paragraph.text)
+                    }
+                } else {
+                    Self.styled(paragraph.text)
+                }
+            }
+        }
+        .font(.body).textSelection(.enabled)
+    }
+
+    static func styled(_ text: String) -> Text {
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        return (try? AttributedString(markdown: text, options: options)).map(Text.init) ?? Text(text)
+    }
+
+    /// The answer's lines without blank ones, each marked when it is a point.
+    static func paragraphs(_ text: String) -> [(text: String, point: Bool)] {
+        text.split(whereSeparator: \.isNewline).compactMap { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { return nil }
+            for marker in ["- ", "• ", "* ", "· "] where trimmed.hasPrefix(marker) {
+                return (String(trimmed.dropFirst(marker.count)), true)
+            }
+            return (trimmed, false)
+        }
+    }
+}
+
 private struct AssistantAskBar: View {
     @ObservedObject var model: AppModel
     @ObservedObject var assistant: MeetingAssistant
@@ -220,9 +259,10 @@ private struct AssistantAskBar: View {
             HStack {
                 Button("Answer Last Question", systemImage: "questionmark.bubble") { assistant.answerLast() }
                     .disabled(!assistant.lines.contains { $0.speaker == .them })
+                    .help("Answer what the others asked last, in full, once they finish saying it")
                 Spacer()
                 Toggle("Auto", isOn: $model.preferences.assistant.autoAnswer).toggleStyle(.switch).controlSize(.mini)
-                    .help("Answer the others' questions as they ask them")
+                    .help("Answer the others' questions on their own once they finish asking")
             }.font(.caption)
         }
     }
